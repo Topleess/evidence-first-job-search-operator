@@ -65,3 +65,15 @@ def test_summary_separates_awaiting_replies_from_bounces():
         {"status": "no_response"}, {"status": "no_response"},
     ])
     assert summary == {"tracked": 4, "replied": 1, "bounced": 1, "awaiting": 2, "reply_rate": 0.25, "bounce_rate": 0.25}
+
+
+def test_unseen_events_are_emitted_once():
+    mod = load_module()
+    report = {"messages": [
+        {"status": "reply", "response_message_id": "r1", "to": "one@example.com"},
+        {"status": "bounce", "response_message_id": "b1", "to": "two@example.com"},
+        {"status": "no_response", "to": "three@example.com"},
+    ]}
+    unseen, state = mod.select_unseen_events(report, {"seen_response_ids": ["r1"]})
+    assert [row["response_message_id"] for row in unseen] == ["b1"]
+    assert state == {"seen_response_ids": ["b1", "r1"]}

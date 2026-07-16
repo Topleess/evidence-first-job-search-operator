@@ -56,6 +56,20 @@ def summarize(results: Iterable[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def select_unseen_events(
+    report: dict[str, Any], state: dict[str, Any]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    seen = {str(value) for value in state.get("seen_response_ids", []) if value}
+    unseen = []
+    for row in report.get("messages", []):
+        response_id = str(row.get("response_message_id", ""))
+        if row.get("status") in {"reply", "bounce"} and response_id:
+            if response_id not in seen:
+                unseen.append(row)
+            seen.add(response_id)
+    return unseen, {"seen_response_ids": sorted(seen)}
+
+
 def refresh_access_token(token_path: Path) -> tuple[str, str]:
     token = json.loads(token_path.read_text(encoding="utf-8"))
     form = urllib.parse.urlencode({
