@@ -1,0 +1,45 @@
+# Python runtime
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Secrets and credentials
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*token*.json
+*credentials*.json
+
+# Private runtime state
+state/
+data/
+inbox/
+applications/
+outreach/
+reports/
+profile/
+sheets/
+
+# Browser/session state
+**/user-data-dir/
+**/browser-profile/
+**/cookies*.json
+
+# Hermes local task state
+.hermes/
+
+# Generated artifacts
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.pdf
+*.docx
