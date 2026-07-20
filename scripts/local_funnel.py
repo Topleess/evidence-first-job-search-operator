@@ -23,14 +23,22 @@ from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = ROOT / "state" / "job_funnel.sqlite3"
-CORE_SRC = Path("/opt/data/job-funnel-public/src")
-if not CORE_SRC.exists():
-    raise RuntimeError(f"job-funnel-core is missing: {CORE_SRC}")
-if str(CORE_SRC) not in sys.path:
-    sys.path.insert(0, str(CORE_SRC))
-
-from job_funnel import Job, SQLiteStore  # noqa: E402
-from job_funnel.storage import IdempotencyConflict  # noqa: E402
+# Prefer an installed public core package (CI/shareable installs). The absolute
+# source checkout remains a development fallback for the production host.
+try:
+    from job_funnel import Job, SQLiteStore
+    from job_funnel.storage import IdempotencyConflict
+except ImportError:
+    CORE_SRC = Path("/opt/data/job-funnel-public/src")
+    if not CORE_SRC.exists():
+        raise RuntimeError(
+            "job-funnel-core is missing; install "
+            "git+https://github.com/Topleess/job-search-autopilot.git"
+        )
+    if str(CORE_SRC) not in sys.path:
+        sys.path.insert(0, str(CORE_SRC))
+    from job_funnel import Job, SQLiteStore
+    from job_funnel.storage import IdempotencyConflict
 
 UTC = timezone.utc
 HIGH_FIT_THRESHOLD = 70

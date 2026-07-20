@@ -1,4 +1,5 @@
 pytest==9.0.3
+job-funnel-core @ git+https://github.com/Topleess/job-search-autopilot.git@06712ab
 beautifulsoup4
 google-api-python-client
 google-auth-oauthlib
