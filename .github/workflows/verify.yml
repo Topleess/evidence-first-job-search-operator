@@ -1,0 +1,25 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Python tests
+        run: uv run --with-requirements requirements-test.in pytest -q scripts/test_*.py
+      - name: Node contract tests
+        run: node --test scripts/test_hh_form_browser.js scripts/test_hh_form_state.js
