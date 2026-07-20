@@ -8,6 +8,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+config/*.env
 secrets/
 *.pem
 *.key
@@ -25,6 +26,8 @@ profile/
 sheets/
 
 # Browser/session state
+node_modules/
+.playwright/
 **/user-data-dir/
 **/browser-profile/
 **/cookies*.json

@@ -183,13 +183,13 @@ def test_followup_due_only_for_submitted_without_terminal_response(tmp_path):
     db = tmp_path / "funnel.sqlite3"
     with mod.LocalFunnel(db) as funnel:
         funnel.record_application(
-            source="hh", external_vacancy_id="100", job_url="https://hh.ru/vacancy/100",
+            source="linkedin", external_vacancy_id="100", job_url="https://www.linkedin.com/jobs/view/100",
             company="A", job_title="PM", status="submitted",
             submitted_at="2026-07-10T00:00:00+00:00", read_back_verified=True,
             evidence_path="a.png",
         )
         funnel.record_application(
-            source="hh", external_vacancy_id="200", job_url="https://hh.ru/vacancy/200",
+            source="linkedin", external_vacancy_id="200", job_url="https://www.linkedin.com/jobs/view/200",
             company="B", job_title="PM", status="rejected",
             submitted_at="2026-07-10T00:00:00+00:00", read_back_verified=True,
             evidence_path="b.png", response_at="2026-07-14T00:00:00+00:00",
@@ -269,6 +269,11 @@ def test_verified_receipt_closes_intent_attributes_run_and_enforces_quota(tmp_pa
             payload=payload,
             now="2026-07-16T10:00:01+00:00",
         )
+        execution_token = funnel.mark_intent_executing(
+            intent_id=reservation.intent_id,
+            worker_id="worker-a",
+            now="2026-07-16T10:00:02+00:00",
+        )
         receipt_id = funnel.record_application(
             source="linkedin",
             external_vacancy_id="4439083216",
@@ -280,6 +285,7 @@ def test_verified_receipt_closes_intent_attributes_run_and_enforces_quota(tmp_pa
             read_back_verified=True,
             evidence_path="applications/acme/result.json",
             intent_id=reservation.intent_id,
+            execution_token=execution_token,
         )
         with pytest.raises(mod.BatchQuotaExceeded):
             funnel.reserve_action_intent(
@@ -365,6 +371,31 @@ def test_ambiguous_side_effect_is_fenced_and_never_rereserved(tmp_path):
     assert intent["last_error_code"] == "transport_lost_after_submit"
 
 
+def test_ambiguous_intent_can_be_permanently_blocked_after_readback(tmp_path):
+    mod = load_module()
+    db = tmp_path / "funnel.sqlite3"
+    with mod.LocalFunnel(db) as funnel:
+        run_id = funnel.begin_batch_run(channel="hh", max_actions=1, started_at="2026-07-16T10:00:00+00:00")
+        intent = funnel.reserve_action_intent(
+            run_id=run_id, kind="application_submit", idempotency_key="hh:123:application",
+            payload={"source": "hh", "external_id": "123", "daily_cap": 20}, now="2026-07-16T10:00:01+00:00",
+        )
+        token = funnel.mark_intent_executing(intent_id=intent.intent_id, worker_id="submit", now="2026-07-16T10:00:02+00:00")
+        funnel.mark_intent_ambiguous(intent_id=intent.intent_id, execution_token=token, now="2026-07-16T10:00:03+00:00", error_code="unknown")
+        claim = funnel.claim_due_reconciliations(worker_id="readback", limit=1, now="2026-07-16T10:00:04+00:00")[0]
+        funnel.close_reconciliation_blocked(
+            intent_id=claim.intent_id, reconciliation_token=claim.reconciliation_token,
+            now="2026-07-16T10:00:05+00:00", error_code="readback_no_submission_never_retry",
+        )
+        assert funnel.claim_due_reconciliations(worker_id="readback", limit=1, now="2026-07-17T10:00:00+00:00") == []
+        with pytest.raises(mod.IntentFenceViolation):
+            funnel.mark_intent_executing(intent_id=intent.intent_id, worker_id="retry", now="2026-07-17T10:00:01+00:00")
+    with sqlite3.connect(db) as con:
+        assert con.execute("SELECT state,last_error_code,reconciliation_attempts FROM action_intents WHERE id=?", (intent.intent_id,)).fetchone() == (
+            "blocked", "readback_no_submission_never_retry", 1,
+        )
+
+
 def test_ambiguous_intent_is_reconciled_without_reexecuting_side_effect(tmp_path):
     mod = load_module()
     db = tmp_path / "funnel.sqlite3"
@@ -426,6 +457,25 @@ def test_ambiguous_intent_is_reconciled_without_reexecuting_side_effect(tmp_path
                 worker_id="submit-b",
                 now="2026-07-16T10:15:01+00:00",
             )
+        funnel.record_application(
+            source="linkedin",
+            external_vacancy_id="4439083999",
+            job_url=payload["job_url"],
+            company="Example",
+            job_title="PM",
+            status="submitted",
+            submitted_at="2026-07-16T10:16:00+00:00",
+            read_back_verified=True,
+            evidence_path="evidence/readback.json",
+            intent_id=intent.intent_id,
+            reconciliation_token=second[0].reconciliation_token,
+        )
+
+    with sqlite3.connect(db) as con:
+        reconciled = con.execute(
+            "SELECT state,last_error_code FROM action_intents WHERE id=?", (intent.intent_id,)
+        ).fetchone()
+    assert reconciled == ("verified", None)
 
 
 def test_emergency_pause_and_batch_lifecycle_fail_closed(tmp_path):
@@ -747,6 +797,95 @@ def test_due_followup_becomes_one_threaded_deterministic_intent(tmp_path):
         )
     con = sqlite3.connect(db)
     assert con.execute("SELECT state FROM email_followups WHERE id=?", (followup_id,)).fetchone()[0] == "verified"
+
+
+def test_fenced_application_receipt_rejects_stale_execution_token(tmp_path):
+    mod = load_module()
+    db = tmp_path / "funnel.sqlite3"
+    payload = {"source": "hh", "daily_cap": 20, "external_id": "123", "job_url": "https://hh.kz/vacancy/123"}
+    with mod.LocalFunnel(db) as funnel:
+        run_id = funnel.begin_batch_run(channel="hh", max_actions=1, started_at="2026-07-17T10:00:00+00:00")
+        intent = funnel.reserve_action_intent(
+            run_id=run_id, kind="application_submit", idempotency_key="hh:123:application",
+            payload=payload, now="2026-07-17T10:00:01+00:00",
+        )
+        token = funnel.mark_intent_executing(
+            intent_id=intent.intent_id, worker_id="hh-browser", now="2026-07-17T10:00:02+00:00",
+        )
+        kwargs = dict(
+            source="hh", external_vacancy_id="123", job_url=payload["job_url"], company="Acme",
+            job_title="Product Manager", status="submitted", submitted_at="2026-07-17T10:01:00+00:00",
+            read_back_verified=True, evidence_path="evidence.json", intent_id=intent.intent_id,
+        )
+        with pytest.raises(mod.IntentFenceViolation):
+            funnel.record_application(**kwargs, execution_token="stale")
+        with pytest.raises(mod.IntentFenceViolation):
+            funnel.record_application(**kwargs, execution_token=token)
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT state FROM action_intents WHERE id=?", (intent.intent_id,)).fetchone()[0] == "executing"
+    assert con.execute("SELECT count(*) FROM application_receipts").fetchone()[0] == 0
+
+
+def test_public_hh_submitted_status_rejects_weak_verification_fields(tmp_path):
+    mod = load_module()
+    db = tmp_path / "funnel.sqlite3"
+    with mod.LocalFunnel(db) as funnel:
+        base = dict(
+            source="hh", external_vacancy_id="321", job_url="https://hh.kz/vacancy/321",
+            company="Acme", job_title="PM", status="submitted", evidence_path="missing.json",
+        )
+        with pytest.raises(mod.IntentFenceViolation):
+            funnel.record_application(**base, submitted_at=None, read_back_verified=False)
+        with pytest.raises(mod.IntentFenceViolation):
+            funnel.record_application(**base, submitted_at="2026-07-18T00:00:00+00:00", read_back_verified=False)
+    with sqlite3.connect(db) as con:
+        assert con.execute("SELECT count(*) FROM application_receipts").fetchone()[0] == 0
+
+
+def test_execution_fence_rechecks_pause_and_batch_lifecycle(tmp_path):
+    mod = load_module()
+    db = tmp_path / "funnel.sqlite3"
+    with mod.LocalFunnel(db) as funnel:
+        run_paused = funnel.begin_batch_run(channel="hh", max_actions=20, started_at="2026-07-17T10:00:00+00:00")
+        paused_intent = funnel.reserve_action_intent(
+            run_id=run_paused, kind="application_submit", idempotency_key="hh:pause:application",
+            payload={"source": "hh", "daily_cap": 20, "external_id": "100"}, now="2026-07-17T10:00:01+00:00",
+        )
+        funnel.set_emergency_pause(paused=True, reason="operator stop", now="2026-07-17T10:00:02+00:00")
+        with pytest.raises(mod.IntentFenceViolation):
+            funnel.mark_intent_executing(intent_id=paused_intent.intent_id, worker_id="worker", now="2026-07-17T10:00:03+00:00")
+
+        funnel.set_emergency_pause(paused=False, reason="resume", now="2026-07-17T10:00:04+00:00")
+        run_done = funnel.begin_batch_run(channel="hh", max_actions=20, started_at="2026-07-17T10:01:00+00:00")
+        done_intent = funnel.reserve_action_intent(
+            run_id=run_done, kind="application_submit", idempotency_key="hh:done:application",
+            payload={"source": "hh", "daily_cap": 20, "external_id": "101"}, now="2026-07-17T10:01:01+00:00",
+        )
+        funnel.finish_batch_run(run_id=run_done, state="completed", reason="done", now="2026-07-17T10:01:02+00:00")
+        with pytest.raises(mod.IntentFenceViolation):
+            funnel.mark_intent_executing(intent_id=done_intent.intent_id, worker_id="worker", now="2026-07-17T10:01:03+00:00")
+
+        run_race = funnel.begin_batch_run(channel="hh", max_actions=20, started_at="2026-07-17T10:02:00+00:00")
+        race_intent = funnel.reserve_action_intent(
+            run_id=run_race, kind="application_submit", idempotency_key="hh:race:application",
+            payload={"source": "hh", "daily_cap": 20, "external_id": "102"}, now="2026-07-17T10:02:01+00:00",
+        )
+        race_token = funnel.mark_intent_executing(intent_id=race_intent.intent_id, worker_id="worker", now="2026-07-17T10:02:02+00:00")
+        funnel.set_emergency_pause(paused=True, reason="last moment stop", now="2026-07-17T10:02:03+00:00")
+        with pytest.raises(mod.IntentFenceViolation):
+            funnel.assert_intent_execution_fence(intent_id=race_intent.intent_id, execution_token=race_token)
+
+
+def test_close_execution_blocked_requires_live_token_and_creates_no_receipt(tmp_path):
+    mod = load_module()
+    with mod.LocalFunnel(tmp_path / "f.sqlite3") as funnel:
+        run=funnel.begin_batch_run(channel="ats",max_actions=1,started_at="2026-07-19T20:00:00+00:00")
+        reserved=funnel.reserve_action_intent(run_id=run,kind="application_submit",idempotency_key="ats:1:application",payload={"source":"ashby","external_id":"1"},now="2026-07-19T20:00:01+00:00")
+        token=funnel.mark_intent_executing(intent_id=reserved.intent_id,worker_id="ats",now="2026-07-19T20:00:02+00:00")
+        funnel.close_execution_blocked(intent_id=reserved.intent_id,execution_token=token,now="2026-07-19T20:00:03+00:00",error_code="pre_submit_blocked")
+        assert funnel.get_action_intent(intent_id=reserved.intent_id)["state"]=="blocked"
+        with pytest.raises(mod.IntentFenceViolation):
+            funnel.mark_intent_ambiguous(intent_id=reserved.intent_id,execution_token=token,now="2026-07-19T20:00:04+00:00",error_code="retry")
 
 
 def test_cli_imports_latest_files_and_prints_json(tmp_path, monkeypatch, capsys):

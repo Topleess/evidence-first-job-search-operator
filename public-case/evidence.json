@@ -1,0 +1,351 @@
+{
+  "schema_version": "job_search_public_case.v1",
+  "generated_at": "2026-07-19T23:47:48.531787+00:00",
+  "authoritative_workspace": "/opt/data/job-search",
+  "authoritative_database": "state/job_funnel.sqlite3",
+  "safety_contract": {
+    "durable_intent_before_side_effect": true,
+    "independent_read_back_required": true,
+    "ambiguous_outcome_not_retried": true,
+    "ceilings": {
+      "hh": 20,
+      "linkedin": 5,
+      "email": 5,
+      "ats": 1
+    }
+  },
+  "database_integrity": "ok",
+  "ambiguous_intents": 0,
+  "verified_application_receipts": [
+    {
+      "id": 22,
+      "source": "hh",
+      "external_vacancy_id": "135244629",
+      "status": "submitted",
+      "submitted": 1,
+      "read_back_verified": 1,
+      "submitted_at": "2026-07-19T21:36:23.899000+00:00",
+      "run_id": "65749f00db354326ab48933b78b1e5a2",
+      "action_intent_id": 6
+    },
+    {
+      "id": 21,
+      "source": "hh",
+      "external_vacancy_id": "133612736",
+      "status": "already_applied",
+      "submitted": 0,
+      "read_back_verified": 1,
+      "submitted_at": null,
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 20,
+      "source": "hh",
+      "external_vacancy_id": "133651358",
+      "status": "already_applied",
+      "submitted": 0,
+      "read_back_verified": 1,
+      "submitted_at": null,
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 19,
+      "source": "hh",
+      "external_vacancy_id": "134458130",
+      "status": "already_applied",
+      "submitted": 0,
+      "read_back_verified": 1,
+      "submitted_at": null,
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 18,
+      "source": "hh",
+      "external_vacancy_id": "134947750",
+      "status": "already_applied",
+      "submitted": 0,
+      "read_back_verified": 1,
+      "submitted_at": null,
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 17,
+      "source": "hh",
+      "external_vacancy_id": "135135105",
+      "status": "already_applied",
+      "submitted": 0,
+      "read_back_verified": 1,
+      "submitted_at": null,
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 16,
+      "source": "hh",
+      "external_vacancy_id": "135342085",
+      "status": "already_applied",
+      "submitted": 0,
+      "read_back_verified": 1,
+      "submitted_at": null,
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 15,
+      "source": "hh",
+      "external_vacancy_id": "134943734",
+      "status": "already_applied",
+      "submitted": 0,
+      "read_back_verified": 1,
+      "submitted_at": null,
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 14,
+      "source": "hh",
+      "external_vacancy_id": "131678373",
+      "status": "already_applied",
+      "submitted": 0,
+      "read_back_verified": 1,
+      "submitted_at": null,
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 13,
+      "source": "hh",
+      "external_vacancy_id": "135275129",
+      "status": "already_applied",
+      "submitted": 0,
+      "read_back_verified": 1,
+      "submitted_at": null,
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 12,
+      "source": "hh",
+      "external_vacancy_id": "135084322",
+      "status": "submitted",
+      "submitted": 1,
+      "read_back_verified": 1,
+      "submitted_at": "2026-07-16T21:29:18.163936+00:00",
+      "run_id": "cron-f9a8bf2b74b3436caa6b6724132e6022",
+      "action_intent_id": 3
+    },
+    {
+      "id": 11,
+      "source": "hh",
+      "external_vacancy_id": "134918345",
+      "status": "submitted",
+      "submitted": 1,
+      "read_back_verified": 1,
+      "submitted_at": "2026-07-16T21:31:19.473388+00:00",
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 10,
+      "source": "hh",
+      "external_vacancy_id": "134385516",
+      "status": "submitted",
+      "submitted": 1,
+      "read_back_verified": 1,
+      "submitted_at": "2026-07-16T21:30:27.082212+00:00",
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 9,
+      "source": "hh",
+      "external_vacancy_id": "134227042",
+      "status": "submitted",
+      "submitted": 1,
+      "read_back_verified": 1,
+      "submitted_at": "2026-07-16T21:30:56.743185+00:00",
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 8,
+      "source": "hh",
+      "external_vacancy_id": "133350173",
+      "status": "submitted",
+      "submitted": 1,
+      "read_back_verified": 1,
+      "submitted_at": "2026-07-16T21:29:18.268452+00:00",
+      "run_id": "cron-f9a8bf2b74b3436caa6b6724132e6022",
+      "action_intent_id": 4
+    },
+    {
+      "id": 7,
+      "source": "linkedin",
+      "external_vacancy_id": "4440756817",
+      "status": "submitted",
+      "submitted": 1,
+      "read_back_verified": 1,
+      "submitted_at": "2026-07-16T21:44:46+00:00",
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 6,
+      "source": "linkedin",
+      "external_vacancy_id": "4438259383",
+      "status": "submitted",
+      "submitted": 1,
+      "read_back_verified": 1,
+      "submitted_at": "2026-07-16T16:58:00Z",
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 5,
+      "source": "linkedin",
+      "external_vacancy_id": "4439083216",
+      "status": "rejected",
+      "submitted": 1,
+      "read_back_verified": 1,
+      "submitted_at": "2026-07-12T00:38:25+00:00",
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 4,
+      "source": "hh",
+      "external_vacancy_id": "134202102",
+      "status": "submitted",
+      "submitted": 1,
+      "read_back_verified": 1,
+      "submitted_at": "2026-07-11T18:39:49+00:00",
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 3,
+      "source": "hh",
+      "external_vacancy_id": "134187468",
+      "status": "submitted",
+      "submitted": 1,
+      "read_back_verified": 1,
+      "submitted_at": "2026-07-12T00:42:34+00:00",
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 2,
+      "source": "hh",
+      "external_vacancy_id": "132195551",
+      "status": "submitted",
+      "submitted": 1,
+      "read_back_verified": 1,
+      "submitted_at": "2026-07-12T00:42:26+00:00",
+      "run_id": null,
+      "action_intent_id": null
+    },
+    {
+      "id": 1,
+      "source": "hh",
+      "external_vacancy_id": "134834555",
+      "status": "rejected",
+      "submitted": 1,
+      "read_back_verified": 1,
+      "submitted_at": "2026-07-10T00:15:06+00:00",
+      "run_id": null,
+      "action_intent_id": null
+    }
+  ],
+  "verified_email_receipt_count": 0,
+  "channels": {
+    "hh": {
+      "recent_runs": [
+        {
+          "id": "4006a5b2c2e04941a098f1937b35d706",
+          "state": "failed",
+          "max_actions": 20,
+          "started_at": "2026-07-19T23:44:07.163478+00:00",
+          "finished_at": "2026-07-19T23:44:47.903745+00:00"
+        },
+        {
+          "id": "65749f00db354326ab48933b78b1e5a2",
+          "state": "completed",
+          "max_actions": 1,
+          "started_at": "2026-07-19T21:36:01.574224+00:00",
+          "finished_at": "2026-07-19T21:36:26.140046+00:00"
+        }
+      ]
+    },
+    "linkedin": {
+      "recent_runs": [
+        {
+          "id": "d1744210a08d41ad971d644f0d334760",
+          "state": "completed",
+          "max_actions": 5,
+          "started_at": "2026-07-19T23:45:31.786315+00:00",
+          "finished_at": "2026-07-19T23:45:31.791999+00:00"
+        },
+        {
+          "id": "607c5c34a0454eea91855c30379fd83f",
+          "state": "completed",
+          "max_actions": 5,
+          "started_at": "2026-07-19T23:44:48.091183+00:00",
+          "finished_at": "2026-07-19T23:44:48.096891+00:00"
+        }
+      ]
+    },
+    "ats": {
+      "recent_runs": [
+        {
+          "id": "951c1a9459a049158a93536881f845ea",
+          "state": "completed",
+          "max_actions": 1,
+          "started_at": "2026-07-19T23:45:31.936887+00:00",
+          "finished_at": "2026-07-19T23:45:31.940318+00:00"
+        },
+        {
+          "id": "260ab8ac0e8b46fdb41bc0c985383118",
+          "state": "completed",
+          "max_actions": 1,
+          "started_at": "2026-07-19T23:44:48.327096+00:00",
+          "finished_at": "2026-07-19T23:44:48.330345+00:00"
+        }
+      ]
+    },
+    "email": {
+      "recent_runs": [
+        {
+          "id": "6a26e48e8a5c47eea476fa3a416358df",
+          "state": "completed",
+          "max_actions": 5,
+          "started_at": "2026-07-19T23:45:32.449748+00:00",
+          "finished_at": "2026-07-19T23:45:32.457502+00:00"
+        },
+        {
+          "id": "92f84e27bb4044e190ae903f9271282c",
+          "state": "completed",
+          "max_actions": 5,
+          "started_at": "2026-07-19T23:44:49.084879+00:00",
+          "finished_at": "2026-07-19T23:44:49.092361+00:00"
+        }
+      ]
+    }
+  },
+  "redaction": {
+    "pii_included": false,
+    "secrets_included": false,
+    "excluded": [
+      "candidate identity",
+      "email addresses",
+      "message bodies",
+      "OAuth tokens",
+      "browser profiles",
+      "execution tokens",
+      "intent payloads"
+    ]
+  }
+}

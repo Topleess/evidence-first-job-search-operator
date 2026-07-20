@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://job-search.local/schemas/job_score.schema.json",
+  "title": "JobScore",
+  "description": "Strict schema for scoring one vacancy for Alexander Shamshurin's job-search funnel. For batch processing, apply this schema to each vacancy and store one JSON object per vacancy.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_job_id",
+    "source_url",
+    "company",
+    "title",
+    "fit_score",
+    "role_family",
+    "score_breakdown",
+    "salary_fit",
+    "remote_fit",
+    "proof_matches",
+    "concerns",
+    "next_action",
+    "draft_needed",
+    "rationale"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "job_score.v1"
+    },
+    "source_job_id": {
+      "description": "Original vacancy id from the source system, if available; otherwise a stable deterministic id from source_url.",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "source_url": {
+      "type": ["string", "null"],
+      "format": "uri"
+    },
+    "company": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fit_score": {
+      "description": "Overall weighted score from 0 to 100 using Target Roles Matrix weights.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "role_family": {
+      "description": "Best matching role family or anti-role according to Target Roles Matrix v1.",
+      "type": "string",
+      "enum": [
+        "Product Manager / Product Owner",
+        "Product / Project Lead",
+        "AI / Automation Product Manager",
+        "Founder Associate / Product Operator",
+        "Marketplace / Growth PM",
+        "Technical Product Manager",
+        "Product Operations / BizOps",
+        "AI Automation Consultant / Solutions PM",
+        "Project Manager pure IT",
+        "Developer / Engineer",
+        "Designer / UX executor",
+        "Other / unclear"
+      ]
+    },
+    "score_breakdown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role_family_match",
+        "remote_relocation_fit",
+        "salary_comp_potential",
+        "domain_fit",
+        "evidence_fit",
+        "seniority_ownership",
+        "signal_quality_company_clarity"
+      ],
+      "properties": {
+        "role_family_match": { "$ref": "#/$defs/weightedCriterion25" },
+        "remote_relocation_fit": { "$ref": "#/$defs/weightedCriterion15" },
+        "salary_comp_potential": { "$ref": "#/$defs/weightedCriterion15" },
+        "domain_fit": { "$ref": "#/$defs/weightedCriterion15" },
+        "evidence_fit": { "$ref": "#/$defs/weightedCriterion15" },
+        "seniority_ownership": { "$ref": "#/$defs/weightedCriterion10" },
+        "signal_quality_company_clarity": { "$ref": "#/$defs/weightedCriterion5" }
+      }
+    },
+    "salary_fit": {
+      "description": "Salary interpretation for the user's floor and aspiration zones.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "currency", "salary_min", "salary_max", "salary_text", "notes"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["below_floor", "floor_only", "good", "aspirational", "unknown", "non_salary_role"]
+        },
+        "currency": { "type": ["string", "null"], "minLength": 1 },
+        "salary_min": { "type": ["number", "null"] },
+        "salary_max": { "type": ["number", "null"] },
+        "salary_text": { "type": ["string", "null"] },
+        "notes": { "type": "string" }
+      }
+    },
+    "remote_fit": {
+      "description": "Remote/relocation suitability. Remote is strategically preferred; relocation is acceptable/interesting.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "location", "timezone", "notes"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["remote", "hybrid_ok", "relocation", "office_only", "unclear"]
+        },
+        "location": { "type": ["string", "null"] },
+        "timezone": { "type": ["string", "null"] },
+        "notes": { "type": "string" }
+      }
+    },
+    "proof_matches": {
+      "description": "Concrete candidate proof points that can be used in a tailored response.",
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["vacancy_signal", "candidate_proof", "strength", "public_use"],
+        "properties": {
+          "vacancy_signal": { "type": "string", "minLength": 1 },
+          "candidate_proof": {
+            "type": "string",
+            "enum": [
+              "i.moscow marketplace GMV 0→780M RUB/year",
+              "i.moscow 1200+ orders/month",
+              "fill-rate 88% / +26 pp",
+              "Time-to-Hire 72→18 hours",
+              "view-to-response conversion +9 pp to 24%",
+              "14 MVPs in 48–72 hours / 9 hackathon wins",
+              "6 commercial micro-products / 4.7M RUB revenue",
+              "AdTech / Telegram analytics scoring platform",
+              "AI/RAG/OCR/agents/voice AI/process automation cases",
+              "team/process/zero-to-one product leadership",
+              "technical background bridging business and dev",
+              "other"
+            ]
+          },
+          "strength": { "type": "string", "enum": ["strong", "medium", "weak"] },
+          "public_use": { "type": "string", "enum": ["ok", "mask_or_review", "do_not_use"] }
+        }
+      }
+    },
+    "concerns": {
+      "description": "Risks, weak signals, or questions before drafting/applying.",
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "severity", "note"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "salary",
+              "remote",
+              "role_mismatch",
+              "seniority",
+              "education_filter",
+              "english",
+              "pure_developer",
+              "pure_designer",
+              "low_ownership",
+              "company_signal",
+              "automation_or_tos_risk",
+              "unclear_requirements",
+              "other"
+            ]
+          },
+          "severity": { "type": "string", "enum": ["low", "medium", "high"] },
+          "note": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "next_action": {
+      "description": "Operational action for the funnel.",
+      "type": "string",
+      "enum": ["draft_and_ask_approval", "save_for_review", "manual_review", "skip", "needs_more_data"]
+    },
+    "draft_needed": {
+      "description": "Whether a tailored application/outreach draft should be generated now.",
+      "type": "boolean"
+    },
+    "rationale": {
+      "description": "Short human-readable Russian explanation for digest/debugging.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1200
+    }
+  },
+  "$defs": {
+    "weightedCriterion25": { "$ref": "#/$defs/criterionBase", "properties": { "weight": { "const": 25 } } },
+    "weightedCriterion15": { "$ref": "#/$defs/criterionBase", "properties": { "weight": { "const": 15 } } },
+    "weightedCriterion10": { "$ref": "#/$defs/criterionBase", "properties": { "weight": { "const": 10 } } },
+    "weightedCriterion5": { "$ref": "#/$defs/criterionBase", "properties": { "weight": { "const": 5 } } },
+    "criterionBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["weight", "points", "reason"],
+      "properties": {
+        "weight": { "type": "integer", "minimum": 0, "maximum": 25 },
+        "points": { "type": "number", "minimum": 0, "maximum": 25 },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

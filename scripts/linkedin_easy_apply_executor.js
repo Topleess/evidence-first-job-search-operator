@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { chromium } = require('/tmp/pw/node_modules/playwright');
+const { chromium } = require('playwright');
 
 function arg(name, fallback = '') {
   const i = process.argv.indexOf(`--${name}`);
@@ -20,8 +20,9 @@ function stateCall(db, args) {
 function requiredArgs() {
   const o = {
     jobId: arg('job-id'),
+    runId: arg('run-id'),
     searchUrl: arg('search-url'),
-    db: arg('db', 'state/agent-linkedin.sqlite3'),
+    db: arg('db', 'state/job_funnel.sqlite3'),
     profile: arg('profile', 'data/browser_profiles/linkedin'),
     resume: arg('resume', 'resume/resume_product_manager_alexander_shamshurin_2026-07-09.pdf'),
     location: arg('location', 'Moscow, Russia'),
@@ -30,7 +31,7 @@ function requiredArgs() {
     phoneNational: arg('phone-national', process.env.LINKEDIN_PHONE_NATIONAL || ''),
     evidenceDir: arg('evidence-dir', 'state/linkedin-evidence'),
   };
-  if (!/^\d+$/.test(o.jobId) || !o.searchUrl) throw new Error('--job-id and --search-url are required');
+  if (!/^\d+$/.test(o.jobId) || !o.searchUrl || !o.runId) throw new Error('--job-id, --search-url and --run-id are required');
   return o;
 }
 async function visibleScope(page) {
@@ -97,6 +98,8 @@ async function snapshot(scope) {
 
 (async () => {
   const o = requiredArgs(); fs.mkdirSync(o.evidenceDir, { recursive: true });
+  const recovery = stateCall(o.db, ['recover', '--older-than-seconds', '900', '--source', 'linkedin']);
+  if (recovery.count) console.error(JSON.stringify({ status: 'stale_executions_recovered', intent_ids: recovery.intent_ids }));
   const context = await chromium.launchPersistentContext(o.profile, { headless: true, viewport: { width: 1440, height: 1100 }, locale: 'en-US' });
   const page = context.pages()[0] || await context.newPage();
   let intentId = null, token = null, submitClicked = false;
@@ -125,12 +128,16 @@ async function snapshot(scope) {
     const submit = scope.getByRole('button', { name: /Submit application|Отправить заявку|Подать заявку/i });
     if (!await submit.count()) throw new Error('review_reached_without_submit');
     const fingerprint = sha(JSON.stringify(allSnapshots));
+    const jobTitle = (await page.locator('h1').first().innerText().catch(() => '')).trim().slice(0, 300) || 'Unknown';
+    const company = (await page.locator('a[href*="/company/"]').first().innerText().catch(() => '')).trim().slice(0, 300) || 'Unknown';
     const reserveFile = path.join(o.evidenceDir, `${o.jobId}-intent.json`);
     fs.writeFileSync(reserveFile, JSON.stringify({
       job_id: o.jobId, job_url: `https://www.linkedin.com/jobs/view/${o.jobId}/`, form_fingerprint: fingerprint,
-      payload: { mode: 'linkedin_easy_apply', form_snapshot_sha256: fingerprint, review_text_sha256: sha(reviewText) }
+      payload: { source: 'linkedin', external_id: o.jobId, company, job_title: jobTitle, mode: 'linkedin_easy_apply', form_snapshot_sha256: fingerprint, review_text_sha256: sha(reviewText) }
     }, null, 2));
-    const reserved = stateCall(o.db, ['reserve', '--input', reserveFile]); intentId = reserved.intent_id;
+    const reserved = stateCall(o.db, ['reserve', '--input', reserveFile, '--run-id', o.runId]);
+    if (reserved.state === 'duplicate_verified_receipt') { console.log(JSON.stringify({ status: 'duplicate_verified_receipt', job_id: o.jobId })); return; }
+    intentId = reserved.intent_id;
     token = stateCall(o.db, ['begin', '--intent-id', String(intentId), '--worker-id', 'linkedin-easy-apply-browser']).execution_token;
     await submit.first().click(); submitClicked = true; await page.waitForTimeout(4500);
     const readbackText = (await page.locator('body').innerText()).slice(0, 12000);

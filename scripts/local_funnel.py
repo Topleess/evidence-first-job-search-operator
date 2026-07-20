@@ -808,7 +808,7 @@ class LocalFunnel:
             if control["paused"]:
                 con.rollback()
                 raise WorkflowPaused(control["reason"])
-            run = con.execute("SELECT state FROM batch_runs WHERE id=?", (run_id,)).fetchone()
+            run = con.execute("SELECT state,max_actions FROM batch_runs WHERE id=?", (run_id,)).fetchone()
             if run is None:
                 con.rollback()
                 raise ValueError("unknown batch run")
@@ -825,6 +825,26 @@ class LocalFunnel:
                     raise ActionIntentConflict("idempotency key payload conflict")
                 con.commit()
                 return ActionIntentReservation(intent_id=int(existing["id"]), created=False)
+            if kind == "application_submit" and payload.get("source") == "hh":
+                day = timestamp[:10]
+                used = int(con.execute(
+                    "SELECT count(*) FROM application_receipts WHERE source='hh' AND submitted=1 AND read_back_verified=1 AND substr(submitted_at,1,10)=?",
+                    (day,),
+                ).fetchone()[0])
+                active = int(con.execute(
+                    """SELECT count(*) FROM action_intents
+                       WHERE kind='application_submit' AND state IN ('reserved','executing','ambiguous')
+                         AND json_extract(payload,'$.source')='hh'
+                         AND substr(COALESCE(side_effect_maybe_at,execution_started_at,created_at),1,10)=?""",
+                    (day,),
+                ).fetchone()[0])
+                daily_cap = payload.get("daily_cap")
+                if isinstance(daily_cap, bool) or not isinstance(daily_cap, int) or daily_cap < 1:
+                    con.rollback()
+                    raise ValueError("HH intent requires a positive daily_cap")
+                if used + active >= daily_cap:
+                    con.rollback()
+                    raise BatchQuotaExceeded("daily HH application limit reached")
             quota = con.execute(
                 "SELECT max_actions FROM batch_runs WHERE id=?", (run_id,)
             ).fetchone()
@@ -867,7 +887,9 @@ class LocalFunnel:
                 """UPDATE action_intents
                 SET state='executing',executing_by=?,execution_token=?,
                     execution_started_at=?,updated_at=?,last_error_code=NULL
-                WHERE id=? AND state='reserved'""",
+                WHERE id=? AND state='reserved'
+                  AND EXISTS (SELECT 1 FROM workflow_control WHERE singleton=1 AND paused=0)
+                  AND EXISTS (SELECT 1 FROM batch_runs br WHERE br.id=action_intents.run_id AND br.state='running')""",
                 (worker, token, timestamp, timestamp, intent_id),
             )
             if updated.rowcount != 1:
@@ -875,6 +897,112 @@ class LocalFunnel:
                 raise IntentFenceViolation("intent is not reservable for execution")
             con.commit()
         return token
+
+    def assert_intent_execution_fence(self, *, intent_id: int, execution_token: str) -> None:
+        token = str(execution_token).strip()
+        if not token:
+            raise IntentFenceViolation("missing execution token")
+        with closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                """SELECT 1 FROM action_intents ai
+                JOIN batch_runs br ON br.id=ai.run_id
+                JOIN workflow_control wc ON wc.singleton=1
+                WHERE ai.id=? AND ai.state='executing' AND ai.execution_token=?
+                  AND br.state='running' AND wc.paused=0""",
+                (intent_id, token),
+            ).fetchone()
+            if row is None:
+                con.rollback()
+                raise IntentFenceViolation("execution fence is no longer valid")
+            con.commit()
+
+    def execution_intent_payload(
+        self, *, intent_id: int, execution_token: str = "", reconciliation_token: str = ""
+    ) -> dict[str, Any]:
+        token = str(execution_token).strip()
+        reconcile = str(reconciliation_token).strip()
+        with closing(self._connect()) as con:
+            if token:
+                row = con.execute(
+                    "SELECT payload,execution_started_at FROM action_intents WHERE id=? AND state='executing' AND execution_token=?",
+                    (intent_id, token),
+                ).fetchone()
+            else:
+                row = con.execute(
+                    """SELECT payload,COALESCE(execution_started_at,side_effect_maybe_at) AS execution_started_at
+                       FROM action_intents WHERE id=? AND state='ambiguous' AND reconciliation_token=?""",
+                    (intent_id, reconcile),
+                ).fetchone()
+        if row is None:
+            raise IntentFenceViolation("stale token or intent is not executing")
+        payload = json.loads(row["payload"])
+        payload["_execution_started_at"] = row["execution_started_at"]
+        return payload
+
+    def close_execution_blocked(
+        self,
+        *,
+        intent_id: int,
+        execution_token: str,
+        now: str | datetime,
+        error_code: str,
+    ) -> None:
+        """Close a proven pre-side-effect execution without creating ambiguity or replay."""
+        token = str(execution_token).strip()
+        code = source_name(error_code)
+        if not token:
+            raise IntentFenceViolation("missing execution token")
+        timestamp = parse_time(now).isoformat()
+        with closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            updated = con.execute(
+                """UPDATE action_intents SET state='blocked',last_error_code=?,updated_at=?,
+                   executing_by=NULL,execution_token=NULL
+                   WHERE id=? AND state='executing' AND execution_token=? AND side_effect_maybe_at IS NULL""",
+                (code,timestamp,intent_id,token),
+            )
+            if updated.rowcount != 1:
+                con.rollback();raise IntentFenceViolation("stale token or side effect may have occurred")
+            con.commit()
+
+    def recover_stale_executions(
+        self,
+        *,
+        now: str | datetime,
+        older_than_seconds: int,
+        source: str | None = None,
+    ) -> list[int]:
+        """Conservatively fence crashed workers without replaying their side effects."""
+        if isinstance(older_than_seconds, bool) or not isinstance(older_than_seconds, int) or older_than_seconds < 1:
+            raise ValueError("older_than_seconds must be a positive integer")
+        timestamp = parse_time(now)
+        cutoff = (timestamp - timedelta(seconds=older_than_seconds)).isoformat()
+        params: list[Any] = [timestamp.isoformat(), timestamp.isoformat(), cutoff]
+        source_filter = ""
+        if source is not None:
+            normalized = source_name(source)
+            source_filter = " AND json_extract(payload,'$.source')=?"
+            params.append(normalized)
+        with closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            rows = con.execute(
+                """SELECT id FROM action_intents
+                   WHERE state='executing' AND execution_started_at<=?""" + source_filter + " ORDER BY id",
+                tuple([cutoff] + params[3:]),
+            ).fetchall()
+            ids = [int(row["id"]) for row in rows]
+            if ids:
+                marks = ",".join("?" for _ in ids)
+                con.execute(
+                    f"""UPDATE action_intents
+                        SET state='ambiguous',side_effect_maybe_at=?,last_error_code='worker_crash_unknown_side_effect',
+                            updated_at=?,executing_by=NULL,execution_token=NULL
+                        WHERE state='executing' AND id IN ({marks})""",
+                    (timestamp.isoformat(), timestamp.isoformat(), *ids),
+                )
+            con.commit()
+        return ids
 
     def mark_intent_ambiguous(
         self,
@@ -981,6 +1109,47 @@ class LocalFunnel:
                 raise IntentFenceViolation("stale reconciliation token or unsafe state")
             con.commit()
 
+    def close_reconciliation_blocked(
+        self,
+        *,
+        intent_id: int,
+        reconciliation_token: str,
+        now: str | datetime,
+        error_code: str,
+    ) -> None:
+        """Close an ambiguous intent without retry after conclusive or exhausted read-back.
+
+        This transition never creates a receipt and never authorizes a replay.
+        """
+        token = str(reconciliation_token).strip()
+        if not token:
+            raise IntentFenceViolation("missing reconciliation token")
+        timestamp = parse_time(now).isoformat()
+        code = source_name(error_code)
+        with closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            updated = con.execute(
+                """UPDATE action_intents
+                SET state='blocked',reconciling_by=NULL,reconciliation_token=NULL,
+                    next_reconcile_at=NULL,last_error_code=?,updated_at=?
+                WHERE id=? AND state='ambiguous' AND reconciliation_token=?""",
+                (code, timestamp, intent_id, token),
+            )
+            if updated.rowcount != 1:
+                con.rollback()
+                raise IntentFenceViolation("stale reconciliation token or unsafe state")
+            con.commit()
+
+    def has_verified_application_receipt(self, *, source: str, external_id: str) -> bool:
+        """Authoritative pre-submit dedupe across imported and native receipts."""
+        with closing(self._connect()) as con:
+            return con.execute(
+                """SELECT 1 FROM application_receipts
+                   WHERE source=? AND external_vacancy_id=? AND read_back_verified=1
+                   LIMIT 1""",
+                (str(source).strip(), str(external_id).strip()),
+            ).fetchone() is not None
+
     def _link_existing_receipt(self, job_id: int, source: str, external_id: str) -> bool:
         with closing(self._connect()) as con:
             row = con.execute(
@@ -1057,7 +1226,16 @@ class LocalFunnel:
                 result["rejected"] += 1
         return result
 
-    def record_application(
+    def record_application(self, **kwargs: Any) -> int:
+        if "strict_evidence_verified" in kwargs:
+            raise TypeError("strict evidence capability is not part of the public API")
+        source = source_name(str(kwargs.get("source") or ""))
+        status = str(kwargs.get("status") or "").strip().lower()
+        if source == "hh" and status in FOLLOWUP_ELIGIBLE_STATUSES:
+            raise IntentFenceViolation("HH submitted statuses require strict evidence bridge")
+        return self._record_application(**kwargs)
+
+    def _record_application(
         self,
         *,
         source: str,
@@ -1072,6 +1250,9 @@ class LocalFunnel:
         channel: str = "platform",
         response_at: str | None = None,
         intent_id: int | None = None,
+        execution_token: str | None = None,
+        reconciliation_token: str | None = None,
+        strict_evidence_verified: bool = False,
     ) -> int:
         source = source_name(source)
         job_url = canonical_url(job_url)
@@ -1080,17 +1261,24 @@ class LocalFunnel:
         if not status:
             raise ValueError("status is required")
         now = utc_now().isoformat()
-        submitted = int(status in FOLLOWUP_ELIGIBLE_STATUSES or status in TERMINAL_APPLICATION_STATUSES)
+        submitted = int(bool(submitted_at) and bool(read_back_verified) and status in FOLLOWUP_ELIGIBLE_STATUSES)
+        if source == "hh" and submitted and intent_id is None:
+            raise IntentFenceViolation("submitted HH receipt requires strict intent-backed evidence bridge")
         with closing(self._connect()) as con:
             con.execute("BEGIN IMMEDIATE")
             run_id: str | None = None
+            intent_payload: dict[str, Any] = {}
             if intent_id is not None:
                 intent = con.execute(
-                    "SELECT run_id,payload,state FROM action_intents WHERE id=?", (intent_id,)
+                    "SELECT run_id,payload,state,execution_token,reconciliation_token FROM action_intents WHERE id=?", (intent_id,)
                 ).fetchone()
                 if intent is None:
                     con.rollback()
                     raise ValueError("unknown action intent")
+                run_id = str(intent["run_id"])
+                if source == "hh" and not strict_evidence_verified:
+                    con.rollback()
+                    raise IntentFenceViolation("HH intent receipt requires strict evidence bridge")
                 intent_payload = json.loads(intent["payload"])
                 if (
                     intent_payload.get("source") != source
@@ -1098,14 +1286,48 @@ class LocalFunnel:
                 ):
                     con.rollback()
                     raise ActionIntentConflict("receipt identity does not match intent")
-                if intent["state"] not in {"reserved", "executing", "ambiguous", "verified"}:
+                if intent["state"] == "executing":
+                    if not execution_token or intent["execution_token"] != execution_token:
+                        con.rollback()
+                        raise IntentFenceViolation("valid execution token is required")
+                elif intent["state"] == "ambiguous":
+                    if source == "hh" and not strict_evidence_verified:
+                        con.rollback()
+                        raise IntentFenceViolation("HH reconciliation requires strict evidence bridge")
+                    if not reconciliation_token or intent["reconciliation_token"] != reconciliation_token:
+                        con.rollback()
+                        raise IntentFenceViolation("valid reconciliation token is required")
+                elif intent["state"] != "verified":
                     con.rollback()
-                    raise ValueError("action intent cannot accept a receipt")
+                    raise IntentFenceViolation("intent must be executing, reconciling, or already verified")
                 run_id = str(intent["run_id"])
             job = con.execute(
                 "SELECT id FROM jobs WHERE source=? AND external_id=?",
                 (source, external_vacancy_id),
             ).fetchone()
+            if source == "hh" and submitted and intent_id is not None:
+                cap_row = con.execute("SELECT max_actions FROM batch_runs WHERE id=?", (run_id,)).fetchone()
+                day = str(submitted_at)[:10]
+                other_receipts = int(con.execute(
+                    """SELECT count(*) FROM application_receipts
+                       WHERE source='hh' AND submitted=1 AND read_back_verified=1
+                         AND substr(submitted_at,1,10)=? AND external_vacancy_id<>?""",
+                    (day, external_vacancy_id),
+                ).fetchone()[0])
+                other_active = int(con.execute(
+                    """SELECT count(*) FROM action_intents
+                       WHERE id<>? AND kind='application_submit' AND state IN ('reserved','executing','ambiguous')
+                         AND json_extract(payload,'$.source')='hh'
+                         AND substr(COALESCE(side_effect_maybe_at,execution_started_at,created_at),1,10)=?""",
+                    (intent_id, day),
+                ).fetchone()[0])
+                daily_cap = intent_payload.get("daily_cap")
+                if isinstance(daily_cap, bool) or not isinstance(daily_cap, int) or daily_cap < 1:
+                    con.rollback()
+                    raise ValueError("HH intent requires a positive daily_cap")
+                if cap_row is None or other_receipts + other_active + 1 > daily_cap:
+                    con.rollback()
+                    raise BatchQuotaExceeded("verified receipt would exceed daily HH application limit")
             con.execute(
                 """INSERT INTO application_receipts
                 (job_id,job_url,external_vacancy_id,source,company,job_title,channel,status,
@@ -1144,21 +1366,23 @@ class LocalFunnel:
             if intent_id is not None and submitted and read_back_verified:
                 updated = con.execute(
                     """UPDATE action_intents
-                    SET state='verified',updated_at=?,reconciling_by=NULL,
-                        reconciliation_token=NULL,next_reconcile_at=NULL
+                    SET state='verified',updated_at=?,executing_by=NULL,execution_token=NULL,
+                        reconciling_by=NULL,reconciliation_token=NULL,next_reconcile_at=NULL,
+                        last_error_code=NULL
                     WHERE id=? AND state IN ('reserved','executing','ambiguous','verified')""",
                     (now, intent_id),
                 )
                 if updated.rowcount != 1:
                     con.rollback()
                     raise ValueError("action intent transition conflict")
-            con.execute(
-                """UPDATE queue SET state='done', last_error='superseded_by_application_receipt'
-                WHERE state='pending' AND kind IN ('application_review','email_outreach_draft')
-                  AND json_extract(payload,'$.source')=?
-                  AND json_extract(payload,'$.external_id')=?""",
-                (source, external_vacancy_id),
-            )
+            if submitted and read_back_verified:
+                con.execute(
+                    """UPDATE queue SET state='done', last_error='superseded_by_application_receipt'
+                    WHERE state='pending' AND kind IN ('application_review','email_outreach_draft')
+                      AND json_extract(payload,'$.source')=?
+                      AND json_extract(payload,'$.external_id')=?""",
+                    (source, external_vacancy_id),
+                )
             con.commit()
             return int(receipt["id"])
 

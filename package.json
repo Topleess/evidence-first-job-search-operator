@@ -1,0 +1,15 @@
+{
+  "name": "job-search-hh-automation",
+  "private": true,
+  "version": "1.0.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "install:browsers": "PLAYWRIGHT_BROWSERS_PATH=.playwright playwright install chromium",
+    "test:hh": "PLAYWRIGHT_BROWSERS_PATH=.playwright node --test scripts/test_hh_form_state.js scripts/test_hh_form_browser.js"
+  },
+  "dependencies": {
+    "playwright": "1.61.1"
+  }
+}

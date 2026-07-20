@@ -1,0 +1,6 @@
+pytest==9.0.3
+beautifulsoup4
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
+python-docx
