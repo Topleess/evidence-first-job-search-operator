@@ -18,10 +18,25 @@ def load_module():
     return module
 
 
-def test_real_tailored_package_round_trips_through_ats_safe_docx(tmp_path):
+def test_public_fixture_round_trips_through_ats_safe_docx(tmp_path):
     mod = load_module()
-    package = json.loads((ROOT / "state/tailored/0cddd744a044bf9f5a00.json").read_text())
-    profile = json.loads((ROOT / "profile/candidate_profile.json").read_text())
+    package = {
+        "resume": {
+            "target_title": "Product Operations Lead",
+            "summary": "Evidence-backed operator focused on reliable product delivery.",
+            "evidence_bullets": ["Reduced manual handoffs through documented automation."],
+            "ats_keywords": ["product operations", "automation"],
+        },
+        "provenance": {"claims": [{"text": "Reduced manual handoffs through documented automation."}]},
+    }
+    profile = {
+        "candidate": {"public_name_ru": "Публичный кандидат", "english_level": "B2", "links": {}},
+        "experience_highlights": [{
+            "role": "Product Operations Lead", "company": "Example Company", "period": "2024–2026",
+            "highlights_ru": ["Reduced manual handoffs through documented automation."],
+        }],
+        "education": {"items": [{"institution": "Example University", "field": "Product Management"}]},
+    }
     output = mod.render_docx(package, profile, tmp_path / "resume.docx")
     text = mod.extract_docx_text(output)
     assert package["resume"]["target_title"] in text
