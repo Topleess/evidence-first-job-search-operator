@@ -1,0 +1,25 @@
+{
+  "candidate": {
+    "display_name": "Your Name",
+    "location": "",
+    "work_authorization": [],
+    "relocation": "unknown",
+    "languages": []
+  },
+  "search": {
+    "target_roles": [],
+    "excluded_roles": [
+      "Developer",
+      "Designer",
+      "Support"
+    ],
+    "locations": [],
+    "salary_floor": {
+      "amount": 0,
+      "currency": "",
+      "period": "month",
+      "net": false
+    }
+  },
+  "approved_facts": []
+}

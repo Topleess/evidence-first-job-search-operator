@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 import uuid
@@ -166,6 +167,90 @@ def doctor_payload(paths: RuntimePaths) -> str | None:
     return None
 
 
+def _profile_complete(payload: dict) -> bool:
+    candidate = payload.get("candidate", {})
+    search = payload.get("search", {})
+    required_candidate = ("display_name", "location", "work_authorization", "relocation", "languages")
+    required_search = ("target_roles", "excluded_roles", "locations", "salary_floor")
+    return (
+        all(candidate.get(key) not in (None, "", []) for key in required_candidate)
+        and all(search.get(key) not in (None, "", []) for key in required_search)
+        and bool(payload.get("approved_facts"))
+    )
+
+
+def onboard(paths: RuntimePaths, source: Path) -> int:
+    if doctor_payload(paths) is not None:
+        emit({"command": "onboard", "error": "runtime_not_healthy"})
+        return 1
+    try:
+        payload = json.loads(source.read_text())
+    except (OSError, json.JSONDecodeError):
+        emit({"command": "onboard", "error": "invalid_onboarding_file"})
+        return 1
+    facts = payload.get("approved_facts", [])
+    if any(fact.get("approved") is not True for fact in facts):
+        emit({"command": "onboard", "error": "unapproved_candidate_fact"})
+        return 1
+    if not _profile_complete(payload):
+        emit({"command": "onboard", "error": "incomplete_candidate_profile"})
+        return 1
+    saved = {
+        "schema_version": "candidate_facts.v1",
+        "candidate": payload["candidate"],
+        "search": payload["search"],
+        "approved_facts": facts,
+    }
+    temporary = paths.candidate_facts.with_suffix(".tmp")
+    temporary.write_text(json.dumps(saved, ensure_ascii=False, indent=2) + "\n")
+    if os.name != "nt":
+        temporary.chmod(0o600)
+    temporary.replace(paths.candidate_facts)
+    emit(
+        {
+            "command": "onboard",
+            "profile_complete": True,
+            "approved_facts": len(facts),
+            "execution_enabled": False,
+        }
+    )
+    return 0
+
+
+def status(paths: RuntimePaths) -> int:
+    health_error = doctor_payload(paths)
+    if health_error is not None:
+        emit({"command": "status", "healthy": False, "blockers": [health_error]})
+        return 1
+    config = load_config(paths)
+    try:
+        candidate = json.loads(paths.candidate_facts.read_text())
+    except json.JSONDecodeError:
+        candidate = {}
+    blockers: list[str] = []
+    if not _profile_complete(candidate):
+        blockers.append("candidate_profile_incomplete")
+    connected = [
+        name for name, settings in config["channels"].items() if settings.get("enabled") is True
+    ]
+    if not connected:
+        blockers.append("no_channel_connected")
+    execution_enabled = bool(config["execution"]["enabled"])
+    emit(
+        {
+            "command": "status",
+            "healthy": True,
+            "ready_for_demo": True,
+            "ready_for_read_only": not blockers,
+            "ready_for_execute": not blockers and execution_enabled,
+            "execution_enabled": execution_enabled,
+            "connected_channels": connected,
+            "blockers": blockers,
+        }
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="job-search")
     parser.add_argument("--home", help="Per-user runtime home")
@@ -173,6 +258,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("install", help="Create a private safe runtime")
     sub.add_parser("doctor", help="Verify runtime health")
     sub.add_parser("demo", help="Run a synthetic exactly-once lifecycle")
+    onboard_parser = sub.add_parser("onboard", help="Import a human-confirmed candidate profile")
+    onboard_parser.add_argument("--from-file", required=True, type=Path)
+    sub.add_parser("status", help="Show readiness and exact blockers")
     return parser
 
 
@@ -185,6 +273,10 @@ def main() -> int:
         return doctor(paths)
     if args.command == "demo":
         return demo(paths)
+    if args.command == "onboard":
+        return onboard(paths, args.from_file)
+    if args.command == "status":
+        return status(paths)
     raise AssertionError(args.command)
 
 
