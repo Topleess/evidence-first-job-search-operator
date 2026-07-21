@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -263,6 +264,36 @@ def status(paths: RuntimePaths) -> int:
     return 0
 
 
+def _run_hh_script(paths: RuntimePaths, script: str, extra: list[str]) -> int:
+    root = Path(__file__).resolve().parents[1]
+    if not (root / "node_modules" / "playwright").exists():
+        print(json.dumps({
+            "command": script,
+            "ok": False,
+            "blocker": "playwright_not_installed",
+            "action": "run npm ci && npx playwright install chromium in the repository",
+        }, sort_keys=True))
+        return 2
+    command = ["node", str(root / "scripts" / script), "--runtime-home", str(paths.home), *extra]
+    completed = subprocess.run(command, cwd=root)
+    return completed.returncode
+
+
+def hh_auth(paths: RuntimePaths, *, headless: bool) -> int:
+    if doctor_payload(paths) is not None:
+        print(json.dumps({"command": "hh-auth", "ok": False, "blocker": "runtime_not_installed"}, sort_keys=True))
+        return 2
+    extra = ["--headless", "--timeout-ms", "1000"] if headless else []
+    return _run_hh_script(paths, "hh_auth.js", extra)
+
+
+def hh_probe(paths: RuntimePaths, *, vacancy_url: str) -> int:
+    if doctor_payload(paths) is not None:
+        print(json.dumps({"command": "hh-probe", "ok": False, "blocker": "runtime_not_installed"}, sort_keys=True))
+        return 2
+    return _run_hh_script(paths, "hh_readonly_probe.js", ["--vacancy-url", vacancy_url])
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="job-search")
     parser.add_argument("--home", help="Per-user runtime home")
@@ -273,6 +304,10 @@ def build_parser() -> argparse.ArgumentParser:
     onboard_parser = sub.add_parser("onboard", help="Import a human-confirmed candidate profile")
     onboard_parser.add_argument("--from-file", required=True, type=Path)
     sub.add_parser("status", help="Show readiness and exact blockers")
+    auth_parser = sub.add_parser("hh-auth", help="Open the official HH login in an isolated browser")
+    auth_parser.add_argument("--headless", action="store_true", help="Check auth without interactive login")
+    probe_parser = sub.add_parser("hh-probe", help="Read-only HH auth and vacancy probe")
+    probe_parser.add_argument("--vacancy-url", required=True)
     return parser
 
 
@@ -289,6 +324,10 @@ def main() -> int:
         return onboard(paths, args.from_file)
     if args.command == "status":
         return status(paths)
+    if args.command == "hh-auth":
+        return hh_auth(paths, headless=args.headless)
+    if args.command == "hh-probe":
+        return hh_probe(paths, vacancy_url=args.vacancy_url)
     raise AssertionError(args.command)
 
 

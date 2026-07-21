@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 "use strict";
-const { chromium } = require('/tmp/pw/node_modules/playwright');
+const { chromium } = require('playwright');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -9,16 +9,17 @@ function arg(name, fallback = null) {
   const index = process.argv.indexOf(name);
   return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
 }
-const workspace = path.resolve(__dirname, '..');
-const profile = path.resolve(arg('--profile', path.join(workspace, 'data/browser_profiles/hh_ru')));
-const output = path.resolve(arg('--output', path.join(workspace, 'data/acceptance/hh_readonly_probe.json')));
+const defaultHome = process.env.JOB_SEARCH_HOME || path.join(process.env.XDG_DATA_HOME || path.join(require('os').homedir(), '.local', 'share'), 'job-search-operator');
+const runtimeHome = path.resolve(arg('--runtime-home', defaultHome));
+const profile = path.resolve(arg('--profile', path.join(runtimeHome, 'profiles', 'hh')));
+const output = path.resolve(arg('--output', path.join(runtimeHome, 'evidence', 'hh', 'readonly-probe.json')));
 const vacancyUrl = arg('--vacancy-url');
 if (!vacancyUrl || !/^https:\/\/(?:[^/]+\.)?hh\.(?:ru|kz)\/vacancy\/\d+/.test(vacancyUrl)) {
   throw new Error('--vacancy-url must be an https hh.ru/hh.kz vacancy URL');
 }
 const host = new URL(vacancyUrl).hostname;
-if (!profile.startsWith(workspace + path.sep) || !output.startsWith(workspace + path.sep)) {
-  throw new Error('profile and output must stay inside the isolated HH workspace');
+if (![profile, output].every(candidate => candidate === runtimeHome || candidate.startsWith(runtimeHome + path.sep))) {
+  throw new Error('profile and output must stay inside the isolated runtime home');
 }
 
 const applied = /Вы\s*откликнулись|Ваш отклик отправлен работодателю|Отклик отправлен|Резюме доставлено/i;
