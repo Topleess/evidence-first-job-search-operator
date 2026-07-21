@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from portable_runtime import RuntimePaths, bootstrap_runtime, load_config
+from local_funnel import LocalFunnel
 
 
 def test_runtime_paths_use_explicit_home_without_machine_specific_paths(tmp_path):
@@ -53,6 +54,18 @@ def test_bootstrap_creates_private_layout_and_idempotent_database(tmp_path):
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
     assert {"jobs", "action_intents", "application_receipts", "batch_runs"} <= tables
+
+
+def test_bootstrapped_database_is_compatible_with_channel_funnel(tmp_path):
+    paths = RuntimePaths.from_home(tmp_path / "runtime")
+    bootstrap_runtime(paths)
+
+    with LocalFunnel(paths.database) as funnel:
+        run_id = funnel.begin_batch_run(channel="compatibility", max_actions=1, started_at="2026-01-01T00:00:00+00:00")
+        funnel.finish_batch_run(run_id=run_id, state="completed", reason="portable", now="2026-01-01T00:00:00+00:00")
+
+    with sqlite3.connect(paths.database) as conn:
+        assert conn.execute("SELECT state FROM batch_runs WHERE id=?", (run_id,)).fetchone()[0] == "completed"
 
 
 def test_bootstrap_default_config_is_safe_and_non_executing(tmp_path):

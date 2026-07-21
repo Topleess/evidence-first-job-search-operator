@@ -73,53 +73,12 @@ def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
 
 def _initialize_database(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
-        conn.executescript(
-            """
-            PRAGMA journal_mode=WAL;
-            CREATE TABLE IF NOT EXISTS jobs (
-                id INTEGER PRIMARY KEY,
-                source TEXT NOT NULL,
-                external_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                company TEXT,
-                url TEXT,
-                metadata TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(source, external_id)
-            );
-            CREATE TABLE IF NOT EXISTS batch_runs (
-                id TEXT PRIMARY KEY,
-                channel TEXT NOT NULL,
-                state TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                finished_at TEXT,
-                metadata TEXT NOT NULL DEFAULT '{}'
-            );
-            CREATE TABLE IF NOT EXISTS action_intents (
-                id INTEGER PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                channel TEXT NOT NULL,
-                external_id TEXT NOT NULL,
-                state TEXT NOT NULL,
-                payload TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(channel, external_id)
-            );
-            CREATE TABLE IF NOT EXISTS application_receipts (
-                id INTEGER PRIMARY KEY,
-                intent_id INTEGER NOT NULL,
-                source TEXT NOT NULL,
-                external_vacancy_id TEXT NOT NULL,
-                submitted INTEGER NOT NULL DEFAULT 0,
-                read_back_verified INTEGER NOT NULL DEFAULT 0,
-                provider_receipt_id TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(intent_id),
-                FOREIGN KEY(intent_id) REFERENCES action_intents(id)
-            );
-            """
-        )
+    # LocalFunnel initializes the versioned public core schema and then adds
+    # the channel-specific intent/receipt tables used by production workers.
+    from local_funnel import LocalFunnel
+
+    with LocalFunnel(path):
+        pass
     if os.name != "nt":
         path.chmod(0o600)
 

@@ -87,23 +87,24 @@ def demo(paths: RuntimePaths) -> int:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
-            "INSERT INTO batch_runs(id, channel, state, started_at, metadata) "
-            "VALUES (?, ?, 'running', ?, ?)",
-            (run_id, channel, now, json.dumps({"mode": "demo"})),
+            "INSERT INTO batch_runs(id, channel, state, max_actions, started_at, heartbeat_at, detail) "
+            "VALUES (?, ?, 'running', 1, ?, ?, '')",
+            (run_id, channel, now, now),
         )
         row = conn.execute(
-            "SELECT id FROM action_intents WHERE channel=? AND external_id=?",
-            (channel, external_id),
+            "SELECT id FROM action_intents WHERE kind='demo_apply' AND idempotency_key=?",
+            (external_id,),
         ).fetchone()
         if row is None:
             cursor = conn.execute(
-                "INSERT INTO action_intents(run_id, channel, external_id, state, payload) "
-                "VALUES (?, ?, ?, 'prepared', ?)",
+                "INSERT INTO action_intents(run_id, kind, idempotency_key, payload, state, created_at, updated_at) "
+                "VALUES (?, 'demo_apply', ?, ?, 'verified', ?, ?)",
                 (
                     run_id,
-                    channel,
                     external_id,
                     json.dumps({"synthetic": True, "contains_pii": False}),
+                    now,
+                    now,
                 ),
             )
             intent_id = int(cursor.lastrowid)
@@ -111,13 +112,21 @@ def demo(paths: RuntimePaths) -> int:
             # This is the only demo side effect: a local deterministic receipt.
             provider_id = "demo-" + hashlib.sha256(external_id.encode()).hexdigest()[:16]
             conn.execute(
-                "UPDATE action_intents SET state='executed' WHERE id=?",
-                (intent_id,),
-            )
-            conn.execute(
-                "INSERT INTO application_receipts(intent_id, source, external_vacancy_id, "
-                "submitted, read_back_verified, provider_receipt_id) VALUES (?, ?, ?, 1, 1, ?)",
-                (intent_id, provider, external_id, provider_id),
+                "INSERT INTO application_receipts(job_url, external_vacancy_id, source, company, "
+                "job_title, channel, status, submitted, read_back_verified, submitted_at, "
+                "evidence_path, updated_at, run_id, action_intent_id) "
+                "VALUES (?, ?, ?, 'Synthetic Company', 'Synthetic Product Manager', 'demo', "
+                "'submitted', 1, 1, ?, ?, ?, ?, ?)",
+                (
+                    "demo://synthetic-product-manager-001",
+                    external_id,
+                    provider,
+                    now,
+                    provider_id,
+                    now,
+                    run_id,
+                    intent_id,
+                ),
             )
             side_effects = 1
         verified_receipts = conn.execute(
@@ -125,10 +134,13 @@ def demo(paths: RuntimePaths) -> int:
             "WHERE source=? AND external_vacancy_id=? AND read_back_verified=1",
             (provider, external_id),
         ).fetchone()[0]
+        finished = datetime.now(timezone.utc).isoformat()
         conn.execute(
-            "UPDATE batch_runs SET state='completed', finished_at=?, metadata=? WHERE id=?",
+            "UPDATE batch_runs SET state='completed', finished_at=?, heartbeat_at=?, stop_reason=?, detail=? WHERE id=?",
             (
-                datetime.now(timezone.utc).isoformat(),
+                finished,
+                finished,
+                "demo_completed",
                 json.dumps(
                     {
                         "intent_created": intent_created,
