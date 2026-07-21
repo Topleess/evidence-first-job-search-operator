@@ -4,6 +4,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import job_search_cli
+from portable_runtime import RuntimePaths, bootstrap_runtime
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "scripts" / "job_search_cli.py"
@@ -162,7 +165,7 @@ def test_onboard_rejects_unapproved_fact_and_preserves_existing_profile(tmp_path
     assert (home / "candidate" / "facts.json").read_text() == original
 
 
-def test_status_reports_precise_readiness_blockers(tmp_path):
+def test_status_reports_profile_and_channel_blockers(tmp_path):
     home = tmp_path / "operator"
     assert run_cli(home, "install").returncode == 0
 
@@ -171,7 +174,7 @@ def test_status_reports_precise_readiness_blockers(tmp_path):
     assert before["ready_for_read_only"] is False
     assert "candidate_profile_incomplete" in before["blockers"]
     assert "no_channel_connected" in before["blockers"]
-    assert before["execution_enabled"] is False
+    assert before["ready_for_execute"] is False
 
     source = tmp_path / "onboarding.json"
     source.write_text(json.dumps(valid_onboarding_payload()))
@@ -180,3 +183,16 @@ def test_status_reports_precise_readiness_blockers(tmp_path):
     assert "candidate_profile_incomplete" not in after["blockers"]
     assert "no_channel_connected" in after["blockers"]
     assert after["ready_for_execute"] is False
+
+
+def test_successful_hh_authorization_marks_only_read_only_channel_ready(tmp_path, monkeypatch):
+    paths = RuntimePaths.from_home(tmp_path / "operator")
+    bootstrap_runtime(paths)
+    monkeypatch.setattr(job_search_cli, "_run_hh_script", lambda *_args, **_kwargs: 0)
+
+    assert job_search_cli.hh_auth(paths, headless=True) == 0
+
+    config = json.loads(paths.config.read_text())
+    assert config["channels"]["hh"]["enabled"] is True
+    assert config["channels"]["hh"]["authorization"] == "verified"
+    assert config["execution"]["enabled"] is False

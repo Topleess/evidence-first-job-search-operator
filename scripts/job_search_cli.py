@@ -284,7 +284,17 @@ def hh_auth(paths: RuntimePaths, *, headless: bool) -> int:
         print(json.dumps({"command": "hh-auth", "ok": False, "blocker": "runtime_not_installed"}, sort_keys=True))
         return 2
     extra = ["--headless", "--timeout-ms", "1000"] if headless else []
-    return _run_hh_script(paths, "hh_auth.js", extra)
+    result = _run_hh_script(paths, "hh_auth.js", extra)
+    if result == 0:
+        config = load_config(paths)
+        config["channels"]["hh"]["enabled"] = True
+        config["channels"]["hh"]["authorization"] = "verified"
+        temporary = paths.config.with_suffix(".tmp")
+        temporary.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        temporary.replace(paths.config)
+        if os.name != "nt":
+            paths.config.chmod(0o600)
+    return result
 
 
 def hh_probe(paths: RuntimePaths, *, vacancy_url: str) -> int:
