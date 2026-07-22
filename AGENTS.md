@@ -12,6 +12,19 @@ When a user asks to install or configure this repository, act as the onboarding 
 - Never retry an ambiguous external action. Reconcile through provider read-back first.
 - Respect hard ceilings: HH 20, LinkedIn 5, Gmail initial plus follow-up 5 per bounded run. Start every new user at one canary.
 
+## Reuse-first prerequisite discovery
+
+Before declaring a login, configuration, integration, or runtime blocker:
+
+1. inspect the current runtime and the original source directly;
+2. search repository/session history for the last verified working path;
+3. look for an existing local browser profile, OAuth state, config, or credential helper belonging to the same user and account;
+4. if reuse is clearly within the same user's authorized scope, copy it into the isolated runtime without printing its contents;
+5. verify it with the least-privileged read-only health check;
+6. ask the human only when the state is absent, expired, ambiguous, belongs to another person/account, or requires CAPTCHA/OTP/consent.
+
+Never commit, log, summarize, or send cookies/tokens. Never silently reuse one person's authorization for another person's onboarding. Record only readiness metadata such as `authenticated: true`, not secret values.
+
 ## Required onboarding sequence
 
 ### 1. Install an isolated runtime

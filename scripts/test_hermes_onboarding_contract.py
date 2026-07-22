@@ -17,6 +17,9 @@ def test_agents_instructions_define_safe_hermes_onboarding_contract():
         "CAPTCHA",
         "OTP",
         "execution.enabled",
+        "existing local browser profile, OAuth state, config, or credential helper",
+        "least-privileged read-only health check",
+        "Never commit, log, summarize, or send cookies/tokens",
     ):
         assert required in text
 
