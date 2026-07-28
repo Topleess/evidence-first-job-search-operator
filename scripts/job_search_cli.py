@@ -6,14 +6,63 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
+from hh_portable_collect import parse_hh_html
+from local_funnel import LocalFunnel
 from portable_runtime import RuntimePaths, bootstrap_runtime, load_config
+
+
+def browser_prerequisites(
+    root: Path, *, which: Callable[[str], str | None] = shutil.which
+) -> dict[str, object]:
+    """Report portable Playwright/Chromium readiness without installing anything."""
+    node = which("node") is not None
+    npm = which("npm") is not None
+    playwright = (root / "node_modules" / "playwright" / "package.json").is_file()
+    browser_root = root / ".playwright"
+    chromium = any(
+        candidate.is_file()
+        and candidate.name in {"chrome", "chrome-headless-shell"}
+        and os.access(candidate, os.X_OK)
+        for candidate in browser_root.rglob("*")
+    ) if browser_root.is_dir() else False
+    checks = {"node": node, "npm": npm, "playwright": playwright, "chromium": chromium}
+    if not node:
+        blocker = "node_not_installed"
+        actions = ["Install Node.js 18 or newer, including npm"]
+    elif not npm:
+        blocker = "npm_not_installed"
+        actions = ["Install npm for the active Node.js installation"]
+    elif not playwright:
+        blocker = "playwright_not_installed"
+        actions = ["npm ci", "npm run install:browsers"]
+    elif not chromium:
+        blocker = "chromium_not_installed"
+        actions = ["npm run install:browsers"]
+    else:
+        blocker = None
+        actions = []
+    return {
+        "ready": all(checks.values()),
+        "blocker": blocker,
+        "checks": checks,
+        "actions": actions,
+        "fallback": "./job-search collect --channel hh --from-html /path/to/saved-hh-search.html",
+    }
+
+
+def prerequisites(root: Path) -> int:
+    status = browser_prerequisites(root)
+    emit({"command": "prerequisites", **status})
+    return 0 if status["ready"] else 2
 
 
 def emit(payload: dict) -> None:
@@ -304,6 +353,118 @@ def hh_probe(paths: RuntimePaths, *, vacancy_url: str) -> int:
     return _run_hh_script(paths, "hh_readonly_probe.js", ["--vacancy-url", vacancy_url])
 
 
+def collect_hh(paths: RuntimePaths, *, limit: int, from_html: Path | None) -> int:
+    if doctor_payload(paths) is not None:
+        emit({"command": "collect", "ok": False, "blocker": "runtime_not_installed"})
+        return 2
+    if from_html is None:
+        emit({"command": "collect", "ok": False, "blocker": "live_collection_not_configured"})
+        return 2
+    try:
+        rows = parse_hh_html(from_html, limit=limit)
+    except (OSError, UnicodeError, ValueError):
+        emit({"command": "collect", "ok": False, "blocker": "invalid_hh_html"})
+        return 2
+    with LocalFunnel(paths.database) as funnel:
+        imported = funnel.import_rows(rows)
+    emit(
+        {
+            "command": "collect",
+            "ok": True,
+            "channel": "hh",
+            "mode": "local_html",
+            "collected": len(rows),
+            "imported": imported,
+            "external_actions": 0,
+            "google_sheets_used": False,
+        }
+    )
+    return 0
+
+
+def _title_matches_profile(title: str, profile: dict) -> bool:
+    search = profile.get("search", {})
+    normalized = " ".join(title.lower().split())
+    excluded = [" ".join(str(role).lower().split()) for role in search.get("excluded_roles", [])]
+    if any(role and role in normalized for role in excluded):
+        return False
+    targets = [" ".join(str(role).lower().split()) for role in search.get("target_roles", [])]
+    return any(role and (role in normalized or normalized in role) for role in targets)
+
+
+def dry_run_hh(paths: RuntimePaths, *, limit: int) -> int:
+    if doctor_payload(paths) is not None:
+        emit({"command": "dry-run", "ok": False, "blocker": "runtime_not_installed"})
+        return 2
+    if isinstance(limit, bool) or not 1 <= limit <= 20:
+        emit({"command": "dry-run", "ok": False, "blocker": "invalid_limit"})
+        return 2
+    try:
+        profile = json.loads(paths.candidate_facts.read_text())
+    except (OSError, json.JSONDecodeError):
+        profile = {}
+    if not _profile_complete(profile):
+        emit({"command": "dry-run", "ok": False, "blocker": "candidate_profile_incomplete"})
+        return 2
+    config = load_config(paths)
+    hh_config = config["channels"]["hh"]
+    authorized = hh_config.get("enabled") is True and hh_config.get("authorization") == "verified"
+    with sqlite3.connect(paths.database) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """SELECT j.external_id,j.title,j.company,j.url,j.location,j.metadata
+               FROM jobs j
+               WHERE j.source='hh'
+                 AND NOT EXISTS (
+                   SELECT 1 FROM application_receipts r
+                   WHERE r.source='hh' AND r.external_vacancy_id=j.external_id
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1 FROM action_intents i
+                   WHERE i.kind='application_submit'
+                     AND json_extract(i.payload,'$.source')='hh'
+                     AND json_extract(i.payload,'$.external_id')=j.external_id
+                 )
+               ORDER BY j.id DESC"""
+        ).fetchall()
+    candidates = []
+    for row in rows:
+        if not _title_matches_profile(str(row["title"]), profile):
+            continue
+        blockers = []
+        if not authorized:
+            blockers.append("hh_authorization_not_verified")
+        blockers.append("live_eligibility_not_verified")
+        candidates.append(
+            {
+                "external_id": str(row["external_id"]),
+                "title": row["title"],
+                "company": row["company"],
+                "url": row["url"],
+                "location": row["location"] or "",
+                "ready_to_submit": False,
+                "blockers": blockers,
+            }
+        )
+        if len(candidates) >= limit:
+            break
+    emit(
+        {
+            "command": "dry-run",
+            "ok": True,
+            "channel": "hh",
+            "dry_run": True,
+            "candidate_count": len(candidates),
+            "candidates": candidates,
+            "execution_enabled": bool(config["execution"]["enabled"]),
+            "would_submit": 0,
+            "submit_attempted": False,
+            "external_actions": 0,
+        }
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="job-search")
     parser.add_argument("--home", help="Per-user runtime home")
@@ -311,6 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("install", help="Create a private safe runtime")
     sub.add_parser("doctor", help="Verify runtime health")
     sub.add_parser("demo", help="Run a synthetic exactly-once lifecycle")
+    sub.add_parser("prerequisites", help="Report local browser dependency readiness")
     onboard_parser = sub.add_parser("onboard", help="Import a human-confirmed candidate profile")
     onboard_parser.add_argument("--from-file", required=True, type=Path)
     sub.add_parser("status", help="Show readiness and exact blockers")
@@ -318,6 +480,13 @@ def build_parser() -> argparse.ArgumentParser:
     auth_parser.add_argument("--headless", action="store_true", help="Check auth without interactive login")
     probe_parser = sub.add_parser("hh-probe", help="Read-only HH auth and vacancy probe")
     probe_parser.add_argument("--vacancy-url", required=True)
+    collect_parser = sub.add_parser("collect", help="Collect public vacancies into the isolated runtime")
+    collect_parser.add_argument("--channel", choices=("hh",), default="hh")
+    collect_parser.add_argument("--limit", type=int, default=10)
+    collect_parser.add_argument("--from-html", type=Path, help="Parse a saved public HH search page without a browser")
+    dry_run_parser = sub.add_parser("dry-run", help="Preview a bounded channel run without external side effects")
+    dry_run_parser.add_argument("--channel", choices=("hh",), default="hh")
+    dry_run_parser.add_argument("--limit", type=int, default=1)
     return parser
 
 
@@ -330,6 +499,8 @@ def main() -> int:
         return doctor(paths)
     if args.command == "demo":
         return demo(paths)
+    if args.command == "prerequisites":
+        return prerequisites(Path(__file__).resolve().parents[1])
     if args.command == "onboard":
         return onboard(paths, args.from_file)
     if args.command == "status":
@@ -338,6 +509,10 @@ def main() -> int:
         return hh_auth(paths, headless=args.headless)
     if args.command == "hh-probe":
         return hh_probe(paths, vacancy_url=args.vacancy_url)
+    if args.command == "collect":
+        return collect_hh(paths, limit=args.limit, from_html=args.from_html)
+    if args.command == "dry-run":
+        return dry_run_hh(paths, limit=args.limit)
     raise AssertionError(args.command)
 
 

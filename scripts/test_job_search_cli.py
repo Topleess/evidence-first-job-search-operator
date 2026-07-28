@@ -196,3 +196,171 @@ def test_successful_hh_authorization_marks_only_read_only_channel_ready(tmp_path
     assert config["channels"]["hh"]["enabled"] is True
     assert config["channels"]["hh"]["authorization"] == "verified"
     assert config["execution"]["enabled"] is False
+
+
+def test_parser_exposes_bounded_hh_collect_and_dry_run_commands():
+    parser = job_search_cli.build_parser()
+
+    collect_args = parser.parse_args(["collect", "--channel", "hh", "--limit", "3"])
+    dry_run_args = parser.parse_args(["dry-run", "--channel", "hh", "--limit", "1"])
+
+    assert collect_args.command == "collect"
+    assert collect_args.channel == "hh"
+    assert collect_args.limit == 3
+    assert dry_run_args.command == "dry-run"
+    assert dry_run_args.channel == "hh"
+    assert dry_run_args.limit == 1
+
+
+def test_collect_imports_saved_hh_html_without_browser_or_google(tmp_path):
+    home = tmp_path / "operator"
+    html = tmp_path / "hh-search.html"
+    html.write_text(
+        """
+        <article data-qa="vacancy-serp__vacancy">
+          <a data-qa="serp-item__title" href="https://hh.ru/vacancy/123456?from=search">
+            AI Product Manager
+          </a>
+          <span data-qa="vacancy-serp__vacancy-employer">Example &amp; Co</span>
+          <span data-qa="vacancy-serp__vacancy-address">Remote</span>
+          <span data-qa="vacancy-serp__vacancy-compensation">200 000 ₽</span>
+        </article>
+        <article data-qa="vacancy-serp__vacancy">
+          <a data-qa="serp-item__title" href="/vacancy/999999">Product Designer</a>
+          <span data-qa="vacancy-serp__vacancy-employer">Other</span>
+        </article>
+        """,
+        encoding="utf-8",
+    )
+    assert run_cli(home, "install").returncode == 0
+
+    result = run_cli(home, "collect", "--channel", "hh", "--limit", "1", "--from-html", str(html))
+
+    assert result.returncode == 0, result.stderr
+    payload = parse_stdout(result)
+    assert payload["command"] == "collect"
+    assert payload["mode"] == "local_html"
+    assert payload["collected"] == 1
+    assert payload["imported"]["created"] == 1
+    assert payload["external_actions"] == 0
+    assert payload["google_sheets_used"] is False
+    with sqlite3.connect(home / "state" / "operator.sqlite3") as conn:
+        row = conn.execute(
+            "SELECT source,external_id,title,company,url,location FROM jobs"
+        ).fetchone()
+        assert row == (
+            "hh",
+            "123456",
+            "AI Product Manager",
+            "Example & Co",
+            "https://hh.ru/vacancy/123456",
+            "Remote",
+        )
+    assert json.loads((home / "config.json").read_text())["execution"]["enabled"] is False
+
+
+def test_dry_run_previews_collected_hh_job_without_writing_intents_or_receipts(tmp_path):
+    home = tmp_path / "operator"
+    html = tmp_path / "hh-search.html"
+    onboarding = tmp_path / "onboarding.json"
+    html.write_text(
+        """
+        <article data-qa="vacancy-serp__vacancy">
+          <a data-qa="serp-item__title" href="/vacancy/123456">AI Product Manager</a>
+          <span data-qa="vacancy-serp__vacancy-employer">Example</span>
+        </article>
+        """,
+        encoding="utf-8",
+    )
+    onboarding.write_text(json.dumps(valid_onboarding_payload()), encoding="utf-8")
+    assert run_cli(home, "install").returncode == 0
+    assert run_cli(home, "onboard", "--from-file", str(onboarding)).returncode == 0
+    assert run_cli(home, "collect", "--from-html", str(html), "--limit", "1").returncode == 0
+    database = home / "state" / "operator.sqlite3"
+    with sqlite3.connect(database) as conn:
+        before = {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("batch_runs", "action_intents", "application_receipts")
+        }
+
+    result = run_cli(home, "dry-run", "--channel", "hh", "--limit", "1")
+
+    assert result.returncode == 0, result.stderr
+    payload = parse_stdout(result)
+    assert payload["command"] == "dry-run"
+    assert payload["ok"] is True
+    assert payload["dry_run"] is True
+    assert payload["candidate_count"] == 1
+    assert payload["candidates"][0]["external_id"] == "123456"
+    assert payload["candidates"][0]["ready_to_submit"] is False
+    assert "live_eligibility_not_verified" in payload["candidates"][0]["blockers"]
+    assert payload["execution_enabled"] is False
+    assert payload["would_submit"] == 0
+    assert payload["submit_attempted"] is False
+    assert payload["external_actions"] == 0
+    with sqlite3.connect(database) as conn:
+        after = {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("batch_runs", "action_intents", "application_receipts")
+        }
+    assert after == before
+
+
+def test_browser_prerequisites_report_missing_playwright_with_exact_commands(tmp_path):
+    status = job_search_cli.browser_prerequisites(
+        tmp_path,
+        which=lambda name: f"/usr/bin/{name}",
+    )
+
+    assert status["ready"] is False
+    assert status["blocker"] == "playwright_not_installed"
+    assert status["checks"]["node"] is True
+    assert status["checks"]["npm"] is True
+    assert status["checks"]["playwright"] is False
+    assert "npm ci" in status["actions"]
+    assert "--from-html" in status["fallback"]
+
+
+def test_browser_prerequisites_distinguish_missing_and_installed_chromium(tmp_path):
+    playwright = tmp_path / "node_modules" / "playwright"
+    playwright.mkdir(parents=True)
+    (playwright / "package.json").write_text("{}", encoding="utf-8")
+
+    missing = job_search_cli.browser_prerequisites(
+        tmp_path,
+        which=lambda name: f"/usr/bin/{name}",
+    )
+
+    assert missing["ready"] is False
+    assert missing["blocker"] == "chromium_not_installed"
+    assert missing["actions"] == ["npm run install:browsers"]
+
+    chromium = tmp_path / ".playwright" / "chromium-1" / "chrome-linux" / "chrome"
+    chromium.parent.mkdir(parents=True)
+    chromium.write_text("browser", encoding="utf-8")
+    chromium.chmod(0o700)
+    ready = job_search_cli.browser_prerequisites(
+        tmp_path,
+        which=lambda name: f"/usr/bin/{name}",
+    )
+
+    assert ready["ready"] is True
+    assert ready["blocker"] is None
+    assert ready["actions"] == []
+
+
+def test_prerequisites_cli_exposes_machine_readable_browser_status(monkeypatch, capsys):
+    expected = {
+        "ready": False,
+        "blocker": "chromium_not_installed",
+        "checks": {"node": True, "npm": True, "playwright": True, "chromium": False},
+        "actions": ["npm run install:browsers"],
+        "fallback": "./job-search collect --from-html saved.html",
+    }
+    monkeypatch.setattr(job_search_cli, "browser_prerequisites", lambda _root: expected)
+
+    assert job_search_cli.prerequisites(ROOT) == 2
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {"command": "prerequisites", **expected}
+    assert job_search_cli.build_parser().parse_args(["prerequisites"]).command == "prerequisites"
