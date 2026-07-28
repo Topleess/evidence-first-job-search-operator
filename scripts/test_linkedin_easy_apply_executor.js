@@ -84,6 +84,32 @@ test('known controls upload the real resume and verify populated form values', a
   assert.equal(await page.locator('input[type=checkbox]').isChecked(), true);
 });
 
+test('known education dates select current study without inventing end dates', async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.setContent(`
+    <div role="dialog">
+      <label for="current">I currently attend this institution</label><input id="current" type="checkbox">
+      <label for="month">Месяц: From</label><select id="month" required>
+        <option value="Месяц">Месяц</option><option value="09">сентябрь</option>
+      </select>
+      <label for="year">Год: From</label><select id="year" required>
+        <option value="Год">Год</option><option value="2025">2025</option>
+      </select>
+    </div>`);
+
+  const blockers = await executor.fillKnown(page.locator('[role=dialog]'), {
+    resume: '', location: '', firstName: '', lastName: '', phoneNational: '',
+    educationStartMonth: 'сентябрь', educationStartYear: '2025', educationCurrent: true,
+  });
+
+  assert.deepEqual(blockers, []);
+  assert.equal(await page.locator('#current').isChecked(), true);
+  assert.equal(await page.locator('#month').inputValue(), '09');
+  assert.equal(await page.locator('#year').inputValue(), '2025');
+});
+
 test('pre-submit fence rejects ambiguous submit controls', async t => {
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());

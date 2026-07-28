@@ -101,6 +101,9 @@ function requiredArgs() {
     firstName: arg('first-name', process.env.LINKEDIN_FIRST_NAME || ''),
     lastName: arg('last-name', process.env.LINKEDIN_LAST_NAME || ''),
     phoneNational: arg('phone-national', process.env.LINKEDIN_PHONE_NATIONAL || ''),
+    educationStartMonth: arg('education-start-month', ''),
+    educationStartYear: arg('education-start-year', ''),
+    educationCurrent: process.argv.includes('--education-current'),
     evidenceDir: arg('evidence-dir', 'state/linkedin-evidence'),
     dryRun: process.argv.includes('--dry-run'),
   };
@@ -108,8 +111,10 @@ function requiredArgs() {
   return o;
 }
 async function visibleScope(page) {
-  const dialog = page.locator('[role=dialog]').last();
-  return await dialog.count() ? dialog : page.locator('body');
+  // LinkedIn's current SDUI Easy Apply sheet can be visually modal without a
+  // stable dialog role. Scoping to body is safe because all field handlers
+  // already reject hidden controls.
+  return page.locator('body');
 }
 async function clickApply(page, jobId) {
   const card = page.locator(`a[href*="/jobs/view/${jobId}"]`).first();
@@ -119,6 +124,15 @@ async function clickApply(page, jobId) {
   for (let i = 0; i < await buttons.count(); i++) {
     if (await buttons.nth(i).isVisible() && !await buttons.nth(i).isDisabled()) {
       await buttons.nth(i).click(); await page.waitForTimeout(1400); return;
+    }
+  }
+  const links = page.getByRole('link', { name: /Воспользуйтесь опцией простой подачи заявки|Простая подача заявки|Easy Apply/i });
+  for (let i = 0; i < await links.count(); i++) {
+    if (await links.nth(i).isVisible() && await links.nth(i).getAttribute('aria-disabled') !== 'true') {
+      const href = await links.nth(i).getAttribute('href');
+      if (!href || !new RegExp(`/jobs/view/${jobId}/apply/`).test(new URL(href, page.url()).pathname)) continue;
+      await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 90000 });
+      await page.waitForTimeout(3000); return;
     }
   }
   throw new Error('easy_apply_entry_not_found');
@@ -133,12 +147,22 @@ async function fieldLabel(control) {
 }
 async function fillKnown(scope, opts) {
   const blockers = [];
+  if (opts.educationCurrent) {
+    const checkboxes = scope.locator('input[type=checkbox]');
+    for (let i = 0; i < await checkboxes.count(); i++) {
+      const checkbox = checkboxes.nth(i);
+      if (!await checkbox.isVisible() || await checkbox.isDisabled()) continue;
+      const label = await fieldLabel(checkbox);
+      if (/I currently attend this institution|В настоящее время учусь/i.test(label) && !await checkbox.isChecked()) await checkbox.check({ force: true });
+    }
+  }
   const fileInputs = scope.locator('input[type=file]');
   for (let i = 0; i < await fileInputs.count(); i++) {
     const input = fileInputs.nth(i);
     if (await input.isDisabled()) continue;
     const label = await fieldLabel(input);
     const required = await input.evaluate(element => Boolean(element.required || element.getAttribute('aria-required') === 'true'));
+    if (!(await input.isVisible()) && !required) continue;
     if (!/resume|résumé|cv|curriculum|резюме/i.test(label) && !required) continue;
     try {
       await input.setInputFiles(opts.resume);
@@ -160,7 +184,8 @@ async function fillKnown(scope, opts) {
     const tag = await field.evaluate(element => element.tagName);
     const required = await field.evaluate(element => Boolean(element.required || element.getAttribute('aria-required') === 'true'));
     let value = await field.inputValue().catch(() => '');
-    if (!value) {
+    const empty = !value || (tag === 'SELECT' && /^(select an option|выберите|год|месяц)$/i.test(String(value).trim()));
+    if (empty) {
       let wanted = '';
       if (/current location|текущее местоположение|местонахожд/i.test(label)) wanted = opts.location;
       else if (/first name|^имя$/i.test(label)) wanted = opts.firstName;
@@ -177,9 +202,27 @@ async function fillKnown(scope, opts) {
           await field.selectOption({ label: option });
           value = await field.inputValue();
         }
+      } else if (tag === 'SELECT' && /email address|адрес электронной почты/i.test(label)) {
+        const options = (await field.locator('option').allTextContents()).map(text => text.trim()).filter(Boolean);
+        const choices = options.filter(text => !/select an option|выберите/i.test(text));
+        if (choices.length === 1) {
+          await field.selectOption({ label: choices[0] });
+          value = await field.inputValue();
+        }
+      } else if (tag === 'SELECT' && /(?:month|месяц)\s*:\s*from/i.test(label) && opts.educationStartMonth) {
+        const options = await field.locator('option').allTextContents();
+        const wanted = options.find(text => text.trim().toLowerCase() === opts.educationStartMonth.toLowerCase());
+        if (wanted) {
+          await field.selectOption({ label: wanted.trim() });
+          value = await field.inputValue();
+        }
+      } else if (tag === 'SELECT' && /(?:year|год)\s*:\s*from/i.test(label) && opts.educationStartYear) {
+        await field.selectOption({ label: opts.educationStartYear });
+        value = await field.inputValue();
       }
     }
-    if (required && !String(value || '').trim()) blockers.push({ label: label.slice(0, 500), required, kind: tag.toLowerCase(), reason: 'required_value_missing' });
+    const isPlaceholder = tag === 'SELECT' && /^(select an option|выберите)/i.test(String(value || '').trim());
+    if (required && (!String(value || '').trim() || isPlaceholder)) blockers.push({ label: label.slice(0, 500), required, kind: tag.toLowerCase(), reason: 'required_value_missing' });
   }
 
   const choices = scope.locator('input[type=radio], input[type=checkbox]');
@@ -208,9 +251,11 @@ async function fillKnown(scope, opts) {
   return blockers;
 }
 async function nextButton(scope) {
-  const names = /Перейти к следующему шагу|Review your application|Continue to next step|Проверить заявку|^(Next|Continue|Review|Далее|Продолжить|Проверить)$/i;
+  const names = /Перейти к следующему шагу|Review your application|Continue to next step|Проверить заявку|Next|Continue|Review|Далее|Продолжить|Проверить/i;
   const buttons = scope.getByRole('button', { name: names });
   for (let i = 0; i < await buttons.count(); i++) if (await buttons.nth(i).isVisible() && !await buttons.nth(i).isDisabled()) return buttons.nth(i);
+  const fallback = scope.locator('button').filter({ hasText: names });
+  for (let i = 0; i < await fallback.count(); i++) if (await fallback.nth(i).isVisible() && !await fallback.nth(i).isDisabled()) return fallback.nth(i);
   return null;
 }
 async function captureSubmitFence(scope) {
@@ -300,13 +345,19 @@ async function main() {
       const blockers = await fillKnown(scope, o);
       if (blockers.length) {
         const blockerFile = path.join(o.evidenceDir, `${o.jobId}-blocker.json`);
-        fs.writeFileSync(blockerFile, JSON.stringify({ job_id: o.jobId, blockers }, null, 2));
+        fs.writeFileSync(blockerFile, JSON.stringify({ job_id: o.jobId, step, visible_text: text.slice(0, 5000), blockers }, null, 2));
         console.log(JSON.stringify({ status: 'blocked_unknown_question', blocker_file: blockerFile, blockers })); return;
       }
       const raw = await snapshot(scope);
       allSnapshots.push(raw.map(x => ({ id: x.id, type: x.type, required: x.required, label: x.label, value_sha256: sha(x.value) })));
       if (/Submit application|Отправить заявку|Подать заявку/.test(text)) break;
-      const next = await nextButton(scope); if (!next) throw new Error('no_next_or_submit_control');
+      const next = await nextButton(scope);
+      if (!next) {
+        const navigationFile = path.join(o.evidenceDir, `${o.jobId}-navigation-blocker.json`);
+        fs.writeFileSync(navigationFile, JSON.stringify({ job_id: o.jobId, step, visible_text: text.slice(0, 5000) }, null, 2));
+        console.log(JSON.stringify({ status: 'blocked_unknown_navigation', blocker_file: navigationFile, step }));
+        return;
+      }
       await next.click(); await page.waitForTimeout(1500);
     }
     const scope = await visibleScope(page); const reviewText = await scope.innerText();
