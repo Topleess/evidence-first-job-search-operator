@@ -63,7 +63,7 @@ async function protectedAuthProbe(context, origin) {
   try {
     await probe.goto(`${origin}/applicant/resumes`, { waitUntil: 'domcontentloaded', timeout: 90000 });
     await probe.waitForTimeout(1800);
-    const text = (await probe.locator('body').innerText()).slice(0, 10000);
+    const text = (await probe.locator('body').innerText()).slice(0, 100000);
     const state = classifyPage({ url: probe.url(), text, ...(await pageSignals(probe, origin)) });
     if (state.state.startsWith('blocked_')) return state;
     if (!/Мои резюме|Отклики и приглашения/i.test(text)) return { state: 'blocked_auth_unknown' };

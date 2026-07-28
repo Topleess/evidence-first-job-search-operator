@@ -11,15 +11,15 @@ def run(command,timeout=900):
  p=subprocess.run(list(command),cwd=ROOT,text=True,capture_output=True,timeout=timeout)
  return {'command':[str(x) for x in command],'exit_code':p.returncode,'stdout':p.stdout[-4000:],'stderr':p.stderr[-2000:]}
 def main()->int:
- ap=argparse.ArgumentParser();ap.add_argument('--collect',action='store_true');ap.add_argument('--execute',action='store_true');ap.add_argument('--hh-cap',type=int,default=20);ap.add_argument('--linkedin-cap',type=int,default=5);ap.add_argument('--email-cap',type=int,default=5);ap.add_argument('--output-dir',default='state/operator-runs');a=ap.parse_args()
+ ap=argparse.ArgumentParser();ap.add_argument('--collect',action='store_true');ap.add_argument('--execute',action='store_true');ap.add_argument('--hh-cap',type=int,default=20);ap.add_argument('--linkedin-cap',type=int,default=5);ap.add_argument('--email-cap',type=int,default=5);ap.add_argument('--db',default='state/job_funnel.sqlite3');ap.add_argument('--hh-profile',default='data/browser_profiles/hh_ru');ap.add_argument('--fresh-ttl-hours',type=int,default=24);ap.add_argument('--output-dir',default='state/operator-runs');a=ap.parse_args()
  if not 1<=a.hh_cap<=20 or not 1<=a.linkedin_cap<=5 or not 1<=a.email_cap<=5:raise SystemExit('caps exceed contract')
  started=datetime.now(timezone.utc).isoformat();report={'schema_version':'job_search_operator_run.v1','started_at':started,'execute':a.execute,'collection':[],'channels':{}}
  if a.collect:
   for item in COLLECTORS:report['collection'].append(run(['bash',*item]))
-  report['collection'].append(run(['python3','/opt/data/scripts/job_search_local_sqlite_sync.py']))
-  report['collection'].append(run(['python3','scripts/hh_live_eligibility.py','--limit','30']))
+ report['collection'].append(run(['python3','/opt/data/scripts/job_search_local_sqlite_sync.py','--db',a.db]))
+ report['collection'].append(run(['python3','scripts/hh_live_eligibility.py','--db',a.db,'--limit','30','--fresh-ttl-hours',str(a.fresh_ttl_hours)]))
  commands={
-  'hh':['python3','scripts/hh_cron_runner.py','--batch-limit',str(a.hh_cap),'--daily-cap',str(a.hh_cap),*([] if a.execute else ['--dry-run'])],
+  'hh':['python3','scripts/hh_cron_runner.py','--db',a.db,'--profile',a.hh_profile,'--batch-limit',str(a.hh_cap),'--daily-cap',str(a.hh_cap),'--fresh-ttl-hours',str(a.fresh_ttl_hours),*([] if a.execute else ['--dry-run'])],
   'linkedin':['python3','scripts/linkedin_cron_runner.py','--limit',str(a.linkedin_cap),*(['--execute'] if a.execute else [])],
   'ats':['python3','scripts/ats_cron_runner.py',*(['--execute'] if a.execute else [])],
   'gmail':['uv','run','--with','google-api-python-client','--with','google-auth','python3','scripts/email_cron_runner.py','--limit',str(a.email_cap),*(['--execute'] if a.execute else [])],

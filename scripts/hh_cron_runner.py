@@ -36,10 +36,13 @@ def _canonical_candidate_url(value: object, external_id: str) -> str:
     return f"https://hh.{suffix}/vacancy/{external_id}"
 
 
-def select_candidates(db_path: str | Path, *, now: datetime, daily_cap: int, batch_limit: int) -> list[dict]:
-    """Select only explicitly eligible HH items with no receipt or prior intent."""
-    if isinstance(daily_cap, bool) or isinstance(batch_limit, bool) or daily_cap <= 0 or batch_limit <= 0:
-        raise ValueError("daily_cap and batch_limit must be positive")
+def select_candidates(db_path: str | Path, *, now: datetime, daily_cap: int, batch_limit: int, fresh_ttl_hours: int = 24) -> list[dict]:
+    """Select only fresh, explicitly eligible HH application reviews with no receipt or prior intent."""
+    if (
+        isinstance(daily_cap, bool) or isinstance(batch_limit, bool) or isinstance(fresh_ttl_hours, bool)
+        or daily_cap <= 0 or batch_limit <= 0 or fresh_ttl_hours <= 0
+    ):
+        raise ValueError("daily_cap, batch_limit and fresh_ttl_hours must be positive")
     db_path = Path(db_path)
     with sqlite3.connect(db_path) as con:
         con.row_factory = sqlite3.Row
@@ -62,11 +65,13 @@ def select_candidates(db_path: str | Path, *, now: datetime, daily_cap: int, bat
         remaining = max(0, daily_cap - int(used))
         if not remaining:
             return []
+        fresh_cutoff = _iso(now.astimezone(timezone.utc) - timedelta(hours=fresh_ttl_hours))
         rows = con.execute(
             """SELECT id,payload FROM queue
-               WHERE state='pending' AND available_at<=?
+               WHERE kind='application_review' AND state='pending'
+                 AND available_at>=? AND available_at<=?
                  AND json_extract(payload,'$.source')='hh'
-               ORDER BY id""", (_iso(now),)
+               ORDER BY available_at DESC,id""", (fresh_cutoff, _iso(now))
         ).fetchall()
         chosen: list[dict] = []
         seen_ids: set[str] = set()
@@ -300,6 +305,7 @@ def main() -> int:
     parser.add_argument("--profile", default="data/browser_profiles/hh_ru")
     parser.add_argument("--daily-cap", type=int, default=20)
     parser.add_argument("--batch-limit", type=int, default=5)
+    parser.add_argument("--fresh-ttl-hours", type=int, default=24)
     parser.add_argument("--state-dir", default="state/hh-cron")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -310,17 +316,24 @@ def main() -> int:
     with exclusive_lock(lock_path):
         stale_batches, stale_reserved = recover_stale_batches(args.db, now=now)
         recovered = recover_stale_executing(args.db, now=now)
-        jobs = select_candidates(args.db, now=now, daily_cap=args.daily_cap, batch_limit=args.batch_limit)
+        jobs = select_candidates(
+            args.db, now=now, daily_cap=args.daily_cap,
+            batch_limit=args.batch_limit, fresh_ttl_hours=args.fresh_ttl_hours,
+        )
         initial_blockers = ([{"status": "stale_executing_requires_readback", "count": recovered}] if recovered else [])
         if stale_batches:
             initial_blockers.append({"status": "stale_batch_recovered", "count": stale_batches, "reserved_blocked": stale_reserved})
-        watermark = {"started_at": _iso(now), "selected": len(jobs), "verified": 0, "blockers": initial_blockers, "recovered_stale_executing": recovered, "status": "empty"}
+        watermark = {
+            "started_at": _iso(now), "selected": len(jobs), "candidate_count": len(jobs),
+            "verified": 0, "blockers": initial_blockers,
+            "recovered_stale_executing": recovered, "status": "empty",
+            "fresh_ttl_hours": args.fresh_ttl_hours,
+        }
         if not jobs:
             if initial_blockers:
                 watermark["status"] = "blocked"
             atomic_json(state_dir / "watermark.json", watermark)
-            if initial_blockers:
-                print(json.dumps(watermark, ensure_ascii=False))
+            print(json.dumps(watermark, ensure_ascii=False))
             return 1 if initial_blockers else 0
         funnel = LocalFunnel(path=Path(args.db))
         run_id = None

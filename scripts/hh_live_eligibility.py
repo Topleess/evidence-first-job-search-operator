@@ -14,7 +14,7 @@ import json
 import re
 import sqlite3
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -94,11 +94,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default="state/job_funnel.sqlite3")
     ap.add_argument("--limit", type=int, default=20)
+    ap.add_argument("--fresh-ttl-hours", type=int, default=24)
     ap.add_argument("--evidence-dir", default="state/eligibility/hh")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-    if args.limit <= 0:
-        raise SystemExit("--limit must be positive")
+    if args.limit <= 0 or args.fresh_ttl_hours <= 0:
+        raise SystemExit("--limit and --fresh-ttl-hours must be positive")
+    now = datetime.now(timezone.utc)
+    fresh_cutoff = (now - timedelta(hours=args.fresh_ttl_hours)).isoformat()
     evidence_dir = Path(args.evidence_dir)
     evidence_dir.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(args.db, timeout=10)
@@ -107,9 +110,11 @@ def main() -> int:
         """SELECT q.id queue_id,q.payload,j.* FROM queue q
            JOIN jobs j ON j.source=json_extract(q.payload,'$.source')
              AND j.external_id=json_extract(q.payload,'$.external_id')
-           WHERE q.state='pending' AND json_extract(q.payload,'$.source')='hh'
-           ORDER BY CAST(json_extract(q.payload,'$.fit_score') AS INTEGER) DESC,q.id LIMIT ?""",
-        (args.limit,),
+           WHERE q.kind='application_review' AND q.state='pending'
+             AND json_extract(q.payload,'$.source')='hh'
+             AND q.available_at>=? AND q.available_at<=?
+           ORDER BY q.available_at DESC,CAST(json_extract(q.payload,'$.fit_score') AS INTEGER) DESC,q.id LIMIT ?""",
+        (fresh_cutoff, now.isoformat(), args.limit),
     ).fetchall()
     report = {"checked": 0, "eligible": 0, "rejected": 0, "errors": []}
     for row in rows:

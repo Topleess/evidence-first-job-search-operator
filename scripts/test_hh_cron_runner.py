@@ -20,7 +20,7 @@ def enqueue(db, external_id, eligibility):
     }
     with sqlite3.connect(db) as con:
         con.execute("""INSERT INTO queue(kind,payload,idempotency_key,state,available_at,max_attempts)
-                     VALUES('application',?,?, 'pending','2026-07-17T10:00:00+00:00',3)""",
+                     VALUES('application_review',?,?, 'pending','2026-07-17T10:00:00+00:00',3)""",
                     (json.dumps(payload), f"hh:{external_id}"))
 
 
