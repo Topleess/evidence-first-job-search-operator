@@ -31,15 +31,20 @@ function safeId(value) { return String(value).replace(/[^a-zA-Z0-9_-]/g, '_').sl
 const CLOSED = /вакансия в архиве|Вакансия закрыта|работодатель уже наш[её]л|вакансия больше не доступна/i;
 
 async function hasAppliedMarker(page) {
-  return page.evaluate(() => [...document.querySelectorAll('body *')].some(el => {
-    if (el.children.length || !/^Вы[\s\u00a0]*откликнулись$/i.test((el.textContent || '').trim())) return false;
-    if (el.closest('[data-qa="vacancy-description"]')) return false;
-    let card = el.parentElement;
-    for (let i = 0; card && i < 6; i++, card = card.parentElement) {
-      if (/^Вы[\s\u00a0]*откликнулись(?:[\s\u00a0]*Чат)?$/i.test((card.textContent || '').trim()) && /Чат/i.test(card.textContent || '')) return true;
+  return page.evaluate(() => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const text = (node.nodeValue || '').trim();
+      const element = node.parentElement;
+      if (
+        /^Вы[\s\u00a0]*откликнулись$/i.test(text)
+        && element
+        && !element.closest('[data-qa="vacancy-description"]')
+      ) return true;
     }
     return false;
-  }));
+  });
 }
 
 async function validationErrors(page) {
