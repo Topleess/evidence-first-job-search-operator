@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json,subprocess,sys
 from pathlib import Path
+import pytest
 from local_funnel import LocalFunnel
 
 SCRIPT=Path(__file__).with_name('linkedin_submit_state.py')
@@ -14,11 +15,13 @@ def test_linkedin_bridge_uses_only_authoritative_ledger(tmp_path):
  intent_file.write_text(json.dumps({'job_id':'4453058520','form_fingerprint':'abc','payload':{'company':'C','job_title':'PM'}}))
  reserved=call(db,'reserve','--input',str(intent_file),'--run-id',run);assert reserved['created'] is True
  token=call(db,'begin','--intent-id',str(reserved['intent_id']),'--worker-id','test')['execution_token']
- rb.write_text(json.dumps({'marker':'application_submitted','job_id':'4453058520'}));evidence.write_text('Application submitted')
+ rb.write_text(json.dumps({'marker':'application_submitted','job_id':'4453058520','observed_job_url':'https://www.linkedin.com/jobs/view/4453058520/','observed_title':'PM','observed_company':'C'}));evidence.write_text('Application submitted')
  receipt=call(db,'receipt','--intent-id',str(reserved['intent_id']),'--token',token,'--readback',str(rb),'--evidence',str(evidence))
  with LocalFunnel(db) as f:
   assert f.get_action_intent(intent_id=reserved['intent_id'])['state']=='verified'
   assert f.has_verified_application_receipt(source='linkedin',external_id='4453058520')
+ import sqlite3
+ assert sqlite3.connect(db).execute('select job_url,job_title,company from application_receipts where id=?',(receipt['receipt_id'],)).fetchone()==('https://www.linkedin.com/jobs/view/4453058520/','PM','C')
  assert receipt['state']=='verified' and not (tmp_path/'agent-linkedin.sqlite3').exists()
  duplicate=call(db,'reserve','--input',str(intent_file),'--run-id',run)
  assert duplicate=={'created':False,'state':'duplicate_verified_receipt'}
@@ -38,3 +41,30 @@ def test_stale_linkedin_execution_becomes_ambiguous_without_replay(tmp_path):
  dbrow=sqlite3.connect(db).execute('select last_error_code,execution_token from action_intents where id=?',(reserved.intent_id,)).fetchone()
  assert dbrow==('worker_crash_unknown_side_effect',None)
  with LocalFunnel(db) as f: assert not f.has_verified_application_receipt(source='linkedin',external_id='123')
+
+
+def test_linkedin_bridge_can_close_proven_pre_click_failure_without_ambiguity(tmp_path):
+ db=tmp_path/'f.sqlite3'; intent_file=tmp_path/'intent.json'
+ with LocalFunnel(db) as f: run=f.begin_batch_run(channel='linkedin',max_actions=1,started_at='2026-07-19T20:00:00+00:00')
+ intent_file.write_text(json.dumps({'job_id':'4453058521','form_fingerprint':'abc','payload':{'company':'C','job_title':'PM'}}))
+ reserved=call(db,'reserve','--input',str(intent_file),'--run-id',run)
+ token=call(db,'begin','--intent-id',str(reserved['intent_id']),'--worker-id','test')['execution_token']
+ assert call(db,'check','--intent-id',str(reserved['intent_id']),'--token',token)=={'state':'execution_fence_valid'}
+ assert call(db,'blocked','--intent-id',str(reserved['intent_id']),'--token',token,'--reason','review_fingerprint_changed')=={'state':'blocked_pre_side_effect'}
+ import sqlite3
+ row=sqlite3.connect(db).execute('select state,side_effect_maybe_at,last_error_code,execution_token from action_intents where id=?',(reserved['intent_id'],)).fetchone()
+ assert row==('blocked',None,'review_fingerprint_changed',None)
+
+
+def test_linkedin_receipt_rejects_input_derived_identity_without_observed_url(tmp_path):
+ db=tmp_path/'f.sqlite3'; intent_file=tmp_path/'intent.json'; rb=tmp_path/'rb.json'; evidence=tmp_path/'readback.txt'
+ with LocalFunnel(db) as f: run=f.begin_batch_run(channel='linkedin',max_actions=1,started_at='2026-07-19T20:00:00+00:00')
+ intent_file.write_text(json.dumps({'job_id':'4453058522','form_fingerprint':'abc','payload':{'company':'C','job_title':'PM'}}))
+ reserved=call(db,'reserve','--input',str(intent_file),'--run-id',run)
+ token=call(db,'begin','--intent-id',str(reserved['intent_id']),'--worker-id','test')['execution_token']
+ rb.write_text(json.dumps({'marker':'application_submitted','job_id':'4453058522'}));evidence.write_text('Application submitted')
+ with pytest.raises(subprocess.CalledProcessError):
+  call(db,'receipt','--intent-id',str(reserved['intent_id']),'--token',token,'--readback',str(rb),'--evidence',str(evidence))
+ import sqlite3
+ assert sqlite3.connect(db).execute('select state from action_intents where id=?',(reserved['intent_id'],)).fetchone()==('executing',)
+ assert sqlite3.connect(db).execute('select count(*) from application_receipts').fetchone()[0]==0
