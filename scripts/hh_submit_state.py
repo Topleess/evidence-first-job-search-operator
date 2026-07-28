@@ -116,6 +116,7 @@ def main() -> int:
     begin = sub.add_parser("begin"); begin.add_argument("--intent-id", type=int, required=True); begin.add_argument("--worker-id", required=True)
     check = sub.add_parser("check"); check.add_argument("--intent-id", type=int, required=True); check.add_argument("--token", default=os.environ.get("HH_EXECUTION_TOKEN"), required=False)
     ambiguous = sub.add_parser("ambiguous"); ambiguous.add_argument("--intent-id", type=int, required=True); ambiguous.add_argument("--token", default=os.environ.get("HH_EXECUTION_TOKEN"), required=False); ambiguous.add_argument("--reason", required=True)
+    block = sub.add_parser("block"); block.add_argument("--intent-id", type=int, required=True); block.add_argument("--token", default=os.environ.get("HH_EXECUTION_TOKEN"), required=False); block.add_argument("--reason", required=True)
     receipt = sub.add_parser("receipt"); receipt.add_argument("--intent-id", type=int, required=True); receipt.add_argument("--token", default=os.environ.get("HH_EXECUTION_TOKEN"), required=False); receipt.add_argument("--result", required=True)
     reconcile_receipt = sub.add_parser("reconcile-receipt"); reconcile_receipt.add_argument("--intent-id", type=int, required=True); reconcile_receipt.add_argument("--token", default=os.environ.get("HH_RECONCILIATION_TOKEN"), required=False); reconcile_receipt.add_argument("--result", required=True)
     args = parser.parse_args()
@@ -131,6 +132,9 @@ def main() -> int:
         elif args.command == "ambiguous":
             funnel.mark_intent_ambiguous(intent_id=args.intent_id, execution_token=args.token, now=utc_now(), error_code=args.reason[:160])
             output = {"state": "ambiguous"}
+        elif args.command == "block":
+            funnel.close_execution_blocked(intent_id=args.intent_id, execution_token=args.token, now=utc_now(), error_code=args.reason[:160])
+            output = {"state": "blocked"}
         elif args.command == "receipt":
             data = json.loads(Path(args.result).read_text(encoding="utf-8"))
             if not data.get("submitted_at"):

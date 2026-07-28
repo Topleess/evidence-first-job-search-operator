@@ -306,6 +306,7 @@ def main() -> int:
     parser.add_argument("--daily-cap", type=int, default=20)
     parser.add_argument("--batch-limit", type=int, default=5)
     parser.add_argument("--fresh-ttl-hours", type=int, default=24)
+    parser.add_argument("--truth-map", default="")
     parser.add_argument("--state-dir", default="state/hh-cron")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -346,6 +347,11 @@ def main() -> int:
             command = ["node", "scripts/hh_adaptive_executor.js", "--input", str(input_path), "--run-id", run_id,
                        "--db", args.db, "--profile", args.profile, "--limit", str(args.batch_limit), "--daily-cap", str(args.daily_cap),
                        "--output", str(output_path), "--evidence-dir", str(state_dir / "evidence" / run_id)]
+            if args.truth_map:
+                truth_map = Path(args.truth_map)
+                if not truth_map.is_file():
+                    raise RuntimeError("truth_map_missing")
+                command.extend(["--truth-map", str(truth_map)])
             if args.dry_run:
                 command.append("--dry-run")
             executor_env = dict(os.environ)

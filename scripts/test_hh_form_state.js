@@ -111,6 +111,15 @@ test('unknown requiredness blocks instead of assuming optional', () => {
   assert.equal(result.blockers[0].reason, 'requiredness_unknown');
 });
 
+test('unknown requiredness is safe when an approved answer with provenance is available', () => {
+  const result = classifyForm(
+    { questions: [{ key: 'cover', label: 'Сопроводительное письмо', type: 'textarea', required: 'unknown', options: [] }] },
+    { 'label:сопроводительное письмо': { value: 'Подтверждённый текст', provenance: 'approved case bank' } },
+  );
+  assert.equal(result.state, 'form_ready');
+  assert.deepEqual(result.actions, [{ key: 'cover', value: 'Подтверждённый текст', provenance: 'approved case bank' }]);
+});
+
 test('answer provenance is mandatory and requiredness participates in fingerprint', () => {
   const question = { key: 'task_1', label: 'Комментарий', type: 'text', required: true, options: [] };
   const missing = classifyForm({ questions: [question] }, { task_1: { value: 'Ответ' } });

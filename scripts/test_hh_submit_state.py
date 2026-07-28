@@ -1,5 +1,6 @@
 import json
 import hashlib
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -9,6 +10,28 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 from hh_submit_state import reserve_hh, record_verified_hh
 from local_funnel import IntentFenceViolation, LocalFunnel
+
+
+def test_hh_bridge_can_close_execution_only_before_side_effect(tmp_path: Path):
+    db = tmp_path / "funnel.sqlite3"
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    with LocalFunnel(db) as funnel:
+        run_id = funnel.begin_batch_run(channel="hh", max_actions=1, started_at=now)
+        intent = reserve_hh(
+            funnel, run_id=run_id,
+            vacancy={"id": "124", "url": "https://hh.ru/vacancy/124", "company": "Acme", "title": "PM"},
+            form_fingerprint="a" * 64, truth_map_sha256="b" * 64, plan_sha256="c" * 64,
+            now=now.isoformat(),
+        )
+        token = funnel.mark_intent_executing(intent_id=intent.intent_id, worker_id="hh-browser", now=now)
+        funnel.close_execution_blocked(
+            intent_id=intent.intent_id, execution_token=token, now=now,
+            error_code="final_submit_control_changed_before_click",
+        )
+        row = funnel.get_action_intent(intent_id=intent.intent_id)
+        assert row["state"] == "blocked"
+    with sqlite3.connect(db) as con:
+        assert con.execute("SELECT last_error_code FROM action_intents WHERE id=?", (intent.intent_id,)).fetchone()[0] == "final_submit_control_changed_before_click"
 
 
 def test_hh_state_bridge_binds_fingerprint_truth_and_token(tmp_path: Path):

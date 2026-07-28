@@ -94,8 +94,20 @@ async function finalSubmit(page) {
   return null;
 }
 
-function truthFor(_job, base, _questions) {
-  return { ...base };
+function truthFor(job, base, _questions) {
+  const truth = { ...base };
+  const template = truth.$cover_letter_template;
+  delete truth.$cover_letter_template;
+  if (template && String(template.value || '').trim() && String(template.provenance || '').trim()
+      && !truth['label:сопроводительное письмо']) {
+    const title = String(job.title || job.job_title || '').trim();
+    const company = String(job.company_name || job.company || '').trim();
+    truth['label:сопроводительное письмо'] = {
+      value: String(template.value).replaceAll('{title}', title).replaceAll('{company}', company),
+      provenance: String(template.provenance),
+    };
+  }
+  return truth;
 }
 
 async function executeJob(context, options, job) {
@@ -202,7 +214,7 @@ async function executeJob(context, options, job) {
         token = stateCall(options.db, ['begin', '--intent-id', String(intentId), '--worker-id', 'hh-adaptive-browser']).execution_token;
         const authAgain = await protectedAuthProbe(context, origin);
         if (authAgain.state !== 'authenticated') {
-          stateCall(options.db, ['ambiguous', '--intent-id', String(intentId), '--token', token, '--reason', 'auth_lost_before_submit']);
+          stateCall(options.db, ['block', '--intent-id', String(intentId), '--token', token, '--reason', 'auth_lost_before_submit']);
           return { ...row, status: 'blocked_auth_before_submit', intent_id: intentId };
         }
         const finalBoundForm = validateApplyUrl(page.url(), id, origin);
@@ -220,7 +232,7 @@ async function executeJob(context, options, job) {
         }
         const expectedPageState = 'form_step';
         if ((!finalBoundForm.ok && !finalBoundVacancy.ok) || finalPageState.state !== expectedPageState || finalPlan.state !== 'form_ready' || finalPlan.fingerprint !== verifiedPlan.fingerprint) {
-          stateCall(options.db, ['ambiguous', '--intent-id', String(intentId), '--token', token, '--reason', 'final_submit_fence_changed']);
+          stateCall(options.db, ['block', '--intent-id', String(intentId), '--token', token, '--reason', 'final_submit_fence_changed']);
           return { ...row, status: 'blocked_final_submit_fence', intent_id: intentId, step };
         }
         const submitHandle = finalSubmitNow && await finalSubmitNow.locator.elementHandle();
@@ -229,10 +241,10 @@ async function executeJob(context, options, job) {
           ? Boolean(submitHandle && finalBoundVacancy.ok && await submitHandle.evaluate(el => el.getAttribute('data-qa') === 'relocation-warning-confirm'))
           : submitHandle && selectedRootHandle && await submitHandle.evaluate((el, selectedRoot) => {
               const root = el.closest('form, [role="dialog"], main');
-              return Boolean(selectedRoot.contains(el) && root === selectedRoot && root.querySelector('[data-question-id], textarea[name^="task_"], select[name^="task_"], input[name^="task_"]:not([type="hidden"])'));
+              return Boolean(selectedRoot.contains(el) && root === selectedRoot && root.querySelector('[data-question-id], textarea[name^="task_"], textarea[data-qa="vacancy-response-popup-form-letter-input"], select[name^="task_"], input[name^="task_"]:not([type="hidden"])'));
             }, selectedRootHandle);
         if (!submitHandle || !submitScoped) {
-          stateCall(options.db, ['ambiguous', '--intent-id', String(intentId), '--token', token, '--reason', 'final_submit_control_changed']);
+          stateCall(options.db, ['block', '--intent-id', String(intentId), '--token', token, '--reason', 'final_submit_control_changed']);
           return { ...row, status: 'blocked_final_submit_control_changed', intent_id: intentId, step };
         }
         stateCall(options.db, ['check', '--intent-id', String(intentId), '--token', token]);
@@ -274,7 +286,7 @@ async function executeJob(context, options, job) {
     }
     return { ...row, status: 'blocked_step_limit' };
   } catch (error) {
-    if (intentId && token) try { stateCall(options.db, ['ambiguous', '--intent-id', String(intentId), '--token', token, '--reason', String(error.message).slice(0, 150)]); } catch (_) {}
+    if (intentId && token) try { stateCall(options.db, [submitClicked ? 'ambiguous' : 'block', '--intent-id', String(intentId), '--token', token, '--reason', String(error.message).slice(0, 150)]); } catch (_) {}
     return { ...row, status: submitClicked ? 'ambiguous_submit' : 'error_before_submit', error: String(error.message), intent_id: intentId };
   } finally {
     if (page) {
@@ -285,7 +297,7 @@ async function executeJob(context, options, job) {
   }
 }
 
-(async () => {
+async function main() {
   const input = arg('input'); const runId = arg('run-id');
   if (!input || !runId) throw new Error('--input and --run-id are required');
   const options = {
@@ -306,4 +318,10 @@ async function executeJob(context, options, job) {
   } finally { await context.close().catch(() => {}); }
   writeJson(output, results);
   console.log(JSON.stringify({ output, results }, null, 2));
-})().catch(error => { console.error(error.stack || error); process.exit(2); });
+}
+
+module.exports = { truthFor };
+
+if (require.main === module) {
+  main().catch(error => { console.error(error.stack || error); process.exit(2); });
+}

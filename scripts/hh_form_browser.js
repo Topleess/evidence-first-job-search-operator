@@ -66,7 +66,11 @@ async function snapshotQuestions(page) {
       const legend = container.querySelector('legend');
       const linked = first?.id ? container.querySelector(`label[for="${CSS.escape(first.id)}"]`) : null;
       const title = legend || container.querySelector('[data-qa="task-question"], [data-qa*="title"], .bloko-form-legend, .bloko-form-label') || linked;
-      const label = (title?.textContent || first?.getAttribute('aria-label') || first?.name || '').trim().replace(/\s+/g, ' ');
+      const labelledBy = (first?.getAttribute('aria-labelledby') || '')
+        .split(/\s+/)
+        .map(id => document.getElementById(id)?.textContent || '')
+        .join(' ');
+      const label = (title?.textContent || labelledBy || first?.getAttribute('aria-label') || first?.name || '').trim().replace(/\s+/g, ' ');
       const options = (isChoice || isMulti) ? nested.map(el => {
         const optionLabel = el.closest('label') || (el.id ? container.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null);
         return (optionLabel?.textContent || el.value || '').trim().replace(/\s+/g, ' ');

@@ -19,10 +19,6 @@ function classifyForm(snapshot, truth) {
   const blockers = [];
   for (const question of snapshot.questions || []) {
     if (String(question.currentValue ?? '').trim() || (question.currentSelected || []).length) continue;
-    if (question.required === 'unknown') {
-      blockers.push({ key: question.key, label: question.label, reason: 'requiredness_unknown' });
-      continue;
-    }
     const labelKey = `label:${normalizedQuestion(question).label}`;
     const answer = truth[question.key] || truth[labelKey];
     if (answer && String(answer.value ?? '').trim() && String(answer.provenance ?? '').trim()) {
@@ -42,6 +38,8 @@ function classifyForm(snapshot, truth) {
         label: question.label,
         reason: 'answer_provenance_missing',
       });
+    } else if (question.required === 'unknown') {
+      blockers.push({ key: question.key, label: question.label, reason: 'requiredness_unknown' });
     } else if (question.required) {
       blockers.push({
         key: question.key,

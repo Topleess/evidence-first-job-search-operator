@@ -47,6 +47,26 @@ test('snapshot scopes controls to the unique application form root', async () =>
   await browser.close();
 });
 
+test('snapshot resolves an HH textarea label through aria-labelledby', async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  await page.setContent(`
+    <form>
+      <div id="input-label-cover">Сопроводительное письмо</div>
+      <div data-qa="textarea-native-wrapper">
+        <textarea data-qa="vacancy-response-popup-form-letter-input" aria-labelledby="input-label-cover"></textarea>
+      </div>
+      <button data-qa="vacancy-response-submit-popup" type="submit">Откликнуться</button>
+    </form>`);
+
+  const snapshot = await snapshotQuestions(page);
+  assert.equal(snapshot.ambiguousRoot, false);
+  assert.equal(snapshot.questions.length, 1);
+  assert.equal(snapshot.questions[0].label, 'Сопроводительное письмо');
+  assert.equal(snapshot.questions[0].key, 'textarea-native-wrapper');
+  await browser.close();
+});
+
 test('snapshot excludes zero-sized controls and fill supports linked labels and select labels', async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
